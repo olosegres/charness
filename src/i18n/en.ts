@@ -1129,6 +1129,7 @@ export const enDict: Record<string, string> = {
   'account.idProblem.firstCharacter': 'An account id cannot start with «{character}»',
   'account.idProblem.tooLong': 'An account id is at most {max} characters',
   'account.idProblem.reserved': '«default» is the id of the account in ~/.claude',
+  'account.idProblem.buttonWord': '«{id}» is a word the account buttons use',
   'account.idProblem.empty': 'The account id after id: is empty',
   'account.exists': 'A profile named {name} already exists.',
   'account.created': '✅ Profile {name} created. Starting its sign-in…',

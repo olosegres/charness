@@ -1085,6 +1085,7 @@ export const frDict: Record<string, string> = {
   'account.idProblem.firstCharacter': 'L\'identifiant d\'un compte ne peut pas commencer par «{character}»',
   'account.idProblem.tooLong': 'L\'identifiant d\'un compte fait {max} caractères au plus',
   'account.idProblem.reserved': '«default» est l\'identifiant du compte de ~/.claude',
+  'account.idProblem.buttonWord': '«{id}» est un mot qu\'utilisent les boutons des comptes',
   'account.idProblem.empty': 'L\'identifiant après id: est vide',
   'account.exists': 'Un profil nommé {name} existe déjà.',
   'account.created': '✅ Profil {name} créé. Lancement de la connexion…',

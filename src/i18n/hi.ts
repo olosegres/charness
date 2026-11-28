@@ -1084,6 +1084,7 @@ export const hiDict: Record<string, string> = {
   'account.idProblem.firstCharacter': 'खाते का आंतरिक नाम «{character}» से शुरू नहीं हो सकता',
   'account.idProblem.tooLong': 'खाते का आंतरिक नाम अधिकतम {max} वर्ण का होता है',
   'account.idProblem.reserved': '«default» ~/.claude वाले खाते का आंतरिक नाम है',
+  'account.idProblem.buttonWord': '«{id}» खाता बटनों द्वारा इस्तेमाल किया जाने वाला शब्द है',
   'account.idProblem.empty': 'id: के बाद आंतरिक नाम खाली है',
   'account.exists': '{name} नाम की प्रोफ़ाइल पहले से है।',
   'account.created': '✅ प्रोफ़ाइल {name} बनाई गई। साइन इन शुरू हो रहा है…',

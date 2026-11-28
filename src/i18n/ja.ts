@@ -1079,6 +1079,7 @@ export const jaDict: Record<string, string> = {
   'account.idProblem.firstCharacter': 'アカウントの内部名は «{character}» で始められません',
   'account.idProblem.tooLong': 'アカウントの内部名は {max} 文字までです',
   'account.idProblem.reserved': '«default» は ~/.claude のアカウントの内部名です',
+  'account.idProblem.buttonWord': '«{id}» はアカウントのボタンが使う語です',
   'account.idProblem.empty': 'id: の後の内部名が空です',
   'account.exists': '{name} というプロファイルは既にあります。',
   'account.created': '✅ プロファイル {name} を作成しました。ログインを開始します…',

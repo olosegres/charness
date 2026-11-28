@@ -67,6 +67,8 @@ export type ClaudeProfileLabelProblem =
 export type ClaudeProfileIdProblem =
   | { kind: 'empty' }
   | { kind: 'reserved' }
+  /** A word the account buttons' data uses after their prefix ({@link claudeProfileButtonWordIds}). */
+  | { kind: 'buttonWord'; id: string }
   | { kind: 'tooLong'; max: number }
   /** The first character is not a letter `a–z` or a digit (a `-` or `_` may not start an id). */
   | { kind: 'firstCharacter'; character: string }
@@ -122,6 +124,13 @@ function slugifyClaudeProfileLabel(label: string): string {
   return latin.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
+/**
+ * Ids a NEW account never gets: the words the picker's own buttons put where an id goes (`acct_login_menu`, `acct_rm_menu` — the sign-in
+ * and remove sub-menus, `utils/claudeAccountPickerPlan.ts`). Their exact handlers answer first, so an account `menu` could not be signed in
+ * or removed by its buttons. An account of such an id from before stays valid ({@link checkIsValidClaudeProfileName} lets it through).
+ */
+export const claudeProfileButtonWordIds: ReadonlySet<string> = new Set(['menu']);
+
 /** `base` cut so that `suffix` still fits in an id, with no `-` left dangling at the cut. */
 function fitIdBase(base: string, suffix: string): string {
   return base.slice(0, claudeProfileNameMaxLength - suffix.length).replace(/-+$/, '');
@@ -130,12 +139,13 @@ function fitIdBase(base: string, suffix: string): string {
 /**
  * @description The id (folder name) a new account with the display name `label` gets: its slug (`Sergei.Solo@work` →
  * `sergei-solo-work`, `Работа` → `rabota`), `account` when nothing of it survives, cut to {@link claudeProfileNameMaxLength}; on a clash
- * — `isTaken` says so: a known account's id, `default`, another account's display name, a folder already on disk — a number is added
- * (`work-2`, `work-3`, …). Always a valid id ({@link checkIsValidClaudeProfileName}).
+ * — `isTaken` says so: a known account's id, `default`, another account's display name, a folder already on disk — or on a word the
+ * buttons use ({@link claudeProfileButtonWordIds}: «Menu» → `menu-2`) a number is added (`work-2`, `work-3`, …). Always a valid id
+ * ({@link checkIsValidClaudeProfileName}).
  */
 export function deriveClaudeProfileId(label: string, isTaken: (id: string) => boolean): string {
   const base = fitIdBase(slugifyClaudeProfileLabel(label), '') || derivedIdFallback;
-  const isFree = (id: string): boolean => checkIsValidClaudeProfileName(id) && !isTaken(id);
+  const isFree = (id: string): boolean => checkIsValidClaudeProfileName(id) && !claudeProfileButtonWordIds.has(id) && !isTaken(id);
   if (isFree(base)) return base;
   for (let number = 2; ; number += 1) {
     const suffix = `-${number}`;
@@ -170,6 +180,7 @@ export function shortenClaudeProfileLabel(label: string, max: number = claudePro
 export function describeClaudeProfileIdProblem(name: string): ClaudeProfileIdProblem | null {
   if (name === '') return { kind: 'empty' };
   if (name === defaultClaudeProfileName) return { kind: 'reserved' };
+  if (claudeProfileButtonWordIds.has(name)) return { kind: 'buttonWord', id: name };
   const characters = Array.from(name);
   if (!/^[a-z0-9]$/.test(characters[0])) return { kind: 'firstCharacter', character: characters[0] };
   const bad = characters.find((character) => !/^[a-z0-9_-]$/.test(character));

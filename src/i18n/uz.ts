@@ -1085,6 +1085,7 @@ export const uzDict: Record<string, string> = {
   'account.idProblem.firstCharacter': 'Hisobning ichki nomi «{character}» bilan boshlana olmaydi',
   'account.idProblem.tooLong': 'Hisobning ichki nomi ko‘pi bilan {max} ta belgi',
   'account.idProblem.reserved': '«default» — ~/.claude dagi hisobning ichki nomi',
+  'account.idProblem.buttonWord': '«{id}» — hisob tugmalari ishlatadigan so‘z',
   'account.idProblem.empty': 'id: dan keyin ichki nom bo‘sh',
   'account.exists': '{name} nomli profil allaqachon bor.',
   'account.created': '✅ {name} profili yaratildi. Kirish boshlanmoqda…',

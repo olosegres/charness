@@ -1085,6 +1085,7 @@ export const kaDict: Record<string, string> = {
   'account.idProblem.firstCharacter': 'ანგარიშის შიდა სახელი «{character}»-ით ვერ დაიწყება',
   'account.idProblem.tooLong': 'ანგარიშის შიდა სახელი არაუმეტეს {max} სიმბოლოა',
   'account.idProblem.reserved': '«default» ~/.claude-ის ანგარიშის შიდა სახელია',
+  'account.idProblem.buttonWord': '«{id}» ანგარიშის ღილაკების მიერ გამოყენებული სიტყვაა',
   'account.idProblem.empty': 'id:-ის შემდეგ შიდა სახელი ცარიელია',
   'account.exists': 'პროფილი სახელით {name} უკვე არსებობს.',
   'account.created': '✅ პროფილი {name} შეიქმნა. იწყება შესვლა…',

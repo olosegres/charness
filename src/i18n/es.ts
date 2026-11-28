@@ -1085,6 +1085,7 @@ export const esDict: Record<string, string> = {
   'account.idProblem.firstCharacter': 'El identificador de una cuenta no puede empezar por «{character}»',
   'account.idProblem.tooLong': 'El identificador de una cuenta tiene como mucho {max} caracteres',
   'account.idProblem.reserved': '«default» es el identificador de la cuenta de ~/.claude',
+  'account.idProblem.buttonWord': '«{id}» es una palabra que usan los botones de las cuentas',
   'account.idProblem.empty': 'El identificador tras id: está vacío',
   'account.exists': 'Ya existe un perfil llamado {name}.',
   'account.created': '✅ Perfil {name} creado. Iniciando su sesión…',

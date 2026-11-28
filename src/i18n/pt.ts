@@ -1086,6 +1086,7 @@ export const ptDict: Record<string, string> = {
   'account.idProblem.firstCharacter': 'O identificador de uma conta não pode começar por «{character}»',
   'account.idProblem.tooLong': 'O identificador de uma conta tem no máximo {max} caracteres',
   'account.idProblem.reserved': '«default» é o identificador da conta de ~/.claude',
+  'account.idProblem.buttonWord': '«{id}» é uma palavra que os botões das contas usam',
   'account.idProblem.empty': 'O identificador depois de id: está vazio',
   'account.exists': 'Já existe um perfil chamado {name}.',
   'account.created': '✅ Perfil {name} criado. Iniciando o login…',

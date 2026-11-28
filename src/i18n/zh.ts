@@ -1079,6 +1079,7 @@ export const zhDict: Record<string, string> = {
   'account.idProblem.firstCharacter': '账号内部名称不能以「{character}」开头',
   'account.idProblem.tooLong': '账号内部名称最多 {max} 个字符',
   'account.idProblem.reserved': '「default」是 ~/.claude 中账号的内部名称',
+  'account.idProblem.buttonWord': '「{id}」是账号按钮使用的词',
   'account.idProblem.empty': 'id: 后的内部名称为空',
   'account.exists': '已存在名为 {name} 的配置。',
   'account.created': '✅ 配置 {name} 已创建。正在开始登录…',

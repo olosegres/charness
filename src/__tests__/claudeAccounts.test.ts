@@ -1243,6 +1243,14 @@ describe('claudeAccounts: /accounts over its ports', () => {
     }
   });
 
+  it('`id:menu` is refused with the reason — the picker\'s buttons use that word — and nothing is added', async () => {
+    const startedBefore = startedLogins.length;
+    await harness.runCommand('accounts', 'add Menu id:Menu');
+    assert.equal(harness.replies.at(-1)?.text, '❌ «menu» is a word the account buttons use. An id is Latin letters a–z, digits, - and _ (a letter or a digit first), up to 32 characters; capitals become lowercase.');
+    assert.equal(startedLogins.length, startedBefore);
+    assert.equal(harness.state.getClaudeProfileRecord('menu'), undefined);
+  });
+
   it('`id:<id>` naming a folder already on disk that is no account yet is refused like an id in use: the new account never starts on what that folder holds', async () => {
     const strayDir = path.join(dataDir, 'claude-profiles', 'stray');
     fs.mkdirSync(strayDir, { recursive: true });

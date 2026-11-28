@@ -136,6 +136,12 @@ describe('claudeProfileLabels: deriveClaudeProfileId', () => {
     assert.equal(deriveClaudeProfileId('Default', isFree), 'default-2');
   });
 
+  it('never derives `menu`: the picker\'s sub-menus answer to `acct_login_menu` / `acct_rm_menu`, so an account `menu` could not be signed in or removed by its buttons', () => {
+    assert.equal(deriveClaudeProfileId('Menu', isFree), 'menu-2');
+    assert.equal(deriveClaudeProfileId('Меню', isFree), 'menyu', 'only the word itself');
+    assert.equal(deriveClaudeProfileId('Menu team', isFree), 'menu-team');
+  });
+
   it('cuts a long name to the id cap, with the number still fitting and no dash left at the cut', () => {
     const label = `${'a'.repeat(30)} bcdef`;
     const id = deriveClaudeProfileId(label, isFree);
@@ -187,6 +193,12 @@ describe('claudeProfileLabels: describeClaudeProfileIdProblem', () => {
     assert.deepEqual(describeClaudeProfileIdProblem('my work'), { kind: 'character', character: ' ' });
     assert.deepEqual(describeClaudeProfileIdProblem('работа'), { kind: 'firstCharacter', character: 'р' });
     assert.deepEqual(describeClaudeProfileIdProblem('_work'), { kind: 'firstCharacter', character: '_' });
+  });
+
+  it('refuses `menu` typed by hand as a word the buttons use (an account of that id from before keeps working: the gate still lets it through)', () => {
+    assert.deepEqual(describeClaudeProfileIdProblem('menu'), { kind: 'buttonWord', id: 'menu' });
+    assert.equal(checkIsValidClaudeProfileName('menu'), true);
+    assert.equal(describeClaudeProfileIdProblem('menu-2'), null);
   });
 
   it('says what else is wrong: empty, reserved, too long; `null` for a good id', () => {

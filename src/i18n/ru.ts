@@ -1089,6 +1089,7 @@ export const ruDict: Record<string, string> = {
   'account.idProblem.firstCharacter': 'Внутреннее имя аккаунта не может начинаться с «{character}»',
   'account.idProblem.tooLong': 'Внутреннее имя аккаунта — не длиннее {max} символов',
   'account.idProblem.reserved': '«default» — внутреннее имя аккаунта в ~/.claude',
+  'account.idProblem.buttonWord': '«{id}» — слово, которое используют кнопки аккаунтов',
   'account.idProblem.empty': 'После id: не указано внутреннее имя',
   'account.exists': 'Профиль {name} уже существует.',
   'account.created': '✅ Профиль {name} создан. Запускаю вход…',

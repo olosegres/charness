@@ -317,7 +317,9 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       ? t(`account.idProblem.${problem.kind}`, { character: problem.character })
       : problem.kind === 'tooLong'
         ? t('account.idProblem.tooLong', { max: problem.max })
-        : t(`account.idProblem.${problem.kind}`);
+        : problem.kind === 'buttonWord'
+          ? t('account.idProblem.buttonWord', { id: problem.id })
+          : t(`account.idProblem.${problem.kind}`);
     return t('account.invalidName', { problem: reason, max: claudeProfileNameMaxLength });
   }
 

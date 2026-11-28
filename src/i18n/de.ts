@@ -1085,6 +1085,7 @@ export const deDict: Record<string, string> = {
   'account.idProblem.firstCharacter': 'Eine Konto-ID darf nicht mit «{character}» beginnen',
   'account.idProblem.tooLong': 'Eine Konto-ID hat höchstens {max} Zeichen',
   'account.idProblem.reserved': '«default» ist die ID des Kontos in ~/.claude',
+  'account.idProblem.buttonWord': '«{id}» ist ein Wort, das die Konto-Schaltflächen verwenden',
   'account.idProblem.empty': 'Nach id: fehlt die Konto-ID',
   'account.exists': 'Ein Profil namens {name} existiert bereits.',
   'account.created': '✅ Profil {name} angelegt. Anmeldung wird gestartet…',

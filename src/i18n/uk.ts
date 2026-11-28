@@ -1091,6 +1091,7 @@ export const ukDict: Record<string, string> = {
   'account.idProblem.firstCharacter': 'Внутрішня назва акаунта не може починатися з «{character}»',
   'account.idProblem.tooLong': 'Внутрішня назва акаунта — не довша за {max} символів',
   'account.idProblem.reserved': '«default» — внутрішня назва акаунта в ~/.claude',
+  'account.idProblem.buttonWord': '«{id}» — слово, яке використовують кнопки акаунтів',
   'account.idProblem.empty': 'Після id: не вказано внутрішню назву',
   'account.exists': 'Профіль {name} уже існує.',
   'account.created': '✅ Профіль {name} створено. Запускаю вхід…',
