@@ -743,7 +743,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     return capture.kind === 'rename' ? 'rename' : 'add';
   }
 
-  /** ✏️ on an account's row (or the screen it re-rendered): ask for its new display name; the next plain message is it. */
+  /** An account picked in the ✏️ choice: ask for its new display name; the next plain message is it. */
   async function askRename(key: SessionKey, name: string, pickerMessageId: number | null): Promise<void> {
     awaitingProfileName.set(keyToString(key), { kind: 'rename', name, pickerMessageId });
     await replyToThread(key, `${t('account.askRename', { name: formatLabel(name), max: claudeProfileLabelMaxLength })}\n${t('login.esc_hint')}`);
