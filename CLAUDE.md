@@ -169,7 +169,10 @@ per-backend controls are optional methods the bot checks before calling.
   subscription logins kept side by side: a profile is a config directory under `DATA_DIR/claude-profiles/<name>/`
   handed to the CLI through `CLAUDE_CONFIG_DIR` at EVERY spawn (the `ClaudeConfigDirReader` seam in
   `createAdapter.ts`), with `projects/`, settings, skills, plugins and the user memory symlinked back into
-  `~/.claude`; `default` IS `~/.claude`. Instance default from General + per-topic override (state.json, resolver
+  `~/.claude`; `default` IS `~/.claude`. The `<name>` is a FIXED id (folder, button data, picks, the `/limits` list, agents' records —
+  never renamed); what a screen or notice shows is the account's display name (`label`, `utils/claudeProfileLabels.ts`
+  `getClaudeProfileLabel`; `default` is «Main» until renamed; ✏️ changes it) — never print an id to the operator, keep it in logs and
+  agents' context. Instance default from General («the account for all topics») + per-topic override (state.json, resolver
   in the utils module). Never switch an account by swapping files under `~/.claude` — the CLI re-reads them live
   and every running session would change at once; a live switch is the `/model` re-spawn, deferred while the
   process works. Per-profile USAGE (`utils/claudeUsage.ts`, `claudeUsageRefresher.ts`): the OAuth usage
