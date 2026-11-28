@@ -603,20 +603,22 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
 
   /**
    * @description The id a new account with the display name `label` gets: the one typed by hand (`id:<id>`, lowercased), refused when it
-   * is no valid id or names an account already (by id or display name); else derived from the name, a number added on a clash — with a
-   * known id, `default`, another account's display name, or a folder already on disk.
+   * is no valid id or is taken; else derived from the name, a number added on a clash. Taken, both ways: a known id, `default`, another
+   * account's display name, or a folder already on disk — one the profile scan has not adopted yet holds whatever login it holds, and a
+   * new account must never start on it.
    */
   function pickNewProfileId(label: string, explicitId: string | null, entries: readonly ClaudeProfileNameEntry[]): { ok: true; id: string } | { ok: false; refusal: string } {
     const takenIds = new Set(entries.flatMap((entry) => [entry.name, ...entry.labels.map((known) => known.toLowerCase())]));
+    const checkIsTaken = (id: string): boolean => takenIds.has(id) || checkClaudeProfileDirExists(getDataDir(), id);
     if (explicitId !== null) {
       const id = normaliseClaudeProfileName(explicitId);
       const problem = describeClaudeProfileIdProblem(id);
       if (problem !== null) return { ok: false, refusal: describeIdProblem(problem) };
       const owner = findClaudeProfileByTypedName(id, entries);
-      if (owner !== null || takenIds.has(id)) return { ok: false, refusal: t('account.exists', { name: owner === null ? id : formatLabel(owner) }) };
+      if (owner !== null || checkIsTaken(id)) return { ok: false, refusal: t('account.exists', { name: owner === null ? id : formatLabel(owner) }) };
       return { ok: true, id };
     }
-    return { ok: true, id: deriveClaudeProfileId(label, (id) => takenIds.has(id) || checkClaudeProfileDirExists(getDataDir(), id)) };
+    return { ok: true, id: deriveClaudeProfileId(label, checkIsTaken) };
   }
 
   /**

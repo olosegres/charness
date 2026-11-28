@@ -1243,6 +1243,22 @@ describe('claudeAccounts: /accounts over its ports', () => {
     }
   });
 
+  it('`id:<id>` naming a folder already on disk that is no account yet is refused like an id in use: the new account never starts on what that folder holds', async () => {
+    const strayDir = path.join(dataDir, 'claude-profiles', 'stray');
+    fs.mkdirSync(strayDir, { recursive: true });
+    fs.writeFileSync(path.join(strayDir, '.credentials.json'), '{"claudeAiOauth":{"accessToken":"someone-else"}}');
+    const startedBefore = startedLogins.length;
+    try {
+      await harness.runCommand('accounts', 'add New one id:stray');
+      assert.equal(harness.replies.at(-1)?.text, 'A profile named stray already exists.');
+      assert.equal(startedLogins.length, startedBefore, 'no sign-in started');
+      assert.equal(harness.state.getClaudeProfileRecord('stray'), undefined, 'no record made');
+      assert.equal(fs.readFileSync(path.join(strayDir, '.credentials.json'), 'utf8'), '{"claudeAiOauth":{"accessToken":"someone-else"}}', 'the folder is left as it was');
+    } finally {
+      fs.rmSync(strayDir, { recursive: true, force: true });
+    }
+  });
+
   it('➕ takes any name: the id is derived from it (a number on a clash), the name is shown and kept, the sign-in runs under the id; `id:<id>` picks the id by hand', async () => {
     await harness.runCommand('accounts');
     await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_add');

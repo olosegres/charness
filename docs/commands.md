@@ -140,7 +140,8 @@ so one account's usage limit does not stop every topic.
   claude-profiles` prints both). `/accounts add <name> id:<id>` picks the id by hand
   (lowercase Latin letters, digits, `-` and `_`, a letter or digit first, at most 32
   characters; capitals become lowercase — a refused id names the character it cannot
-  hold). No two accounts share a display name (case ignored), and a display name may not
+  hold; an id that is already an account's, or names a folder already in
+  `DATA_DIR/claude-profiles/`, is refused). No two accounts share a display name (case ignored), and a display name may not
   be another account's id; while `~/.claude` has no name of its own, «Main» in every one of
   the bot's languages (`Основной`, `Principal`, …) counts as its name, whatever the topic's
   language. A typed `/accounts use|login|remove <name>` finds one account: an id first, then
