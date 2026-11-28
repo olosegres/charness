@@ -150,7 +150,9 @@ so one account's usage limit does not stop every topic.
   folder, shows its id until you rename it; renaming an account back to its id gives it no
   display name of its own («Main» again for `~/.claude`). Where an older account already
   answers to a «Main» (an id `main` or `principal` from before display names), `~/.claude`
-  reads «Main (~/.claude)» until one of them is renamed, and each answers to its own name.
+  reads «Main (~/.claude)» until `~/.claude` is renamed or that account is removed (renaming
+  the older account does not end it: its id still answers to «main»), and each answers to
+  its own name.
   A message that asks you to type a command (`/accounts login …`) names the account so that
   the command reaches it: its display name, or its id where that name would find another
   account first (a folder `work` adopted next to an account called «Work»).
