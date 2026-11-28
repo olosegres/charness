@@ -155,7 +155,7 @@ describe('renderClaudeAccountAlert (English)', () => {
   });
 
   it('names every account by what the operator calls it — ~/.claude «Main» in the reader\'s language, a renamed one by its name — while the sign-in hint gets the id to word its own way', () => {
-    setClaudeProfileLabelReader((name) => (name === 'work' ? 'Sergei.Solo@work' : undefined));
+    setClaudeProfileLabelReader(() => ({ work: { label: 'Sergei.Solo@work' } }));
     try {
       const hows: string[] = [];
       const text = runWithLocale('ru', () => renderClaudeAccountAlert(
@@ -179,7 +179,7 @@ describe('renderClaudeAccountAlert (English)', () => {
       assert.match(forMarkdown, /«<Main>» is signed in again/);
       assert.match(forMarkdown, /sign it in again: `work`/);
     } finally {
-      setClaudeProfileLabelReader(() => undefined);
+      setClaudeProfileLabelReader(() => ({}));
     }
   });
 });

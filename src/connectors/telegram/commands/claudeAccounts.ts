@@ -37,13 +37,14 @@ import {
 } from '../../../utils/claudeProfiles';
 import type { AnthropicApiKeyCheck } from '../../../utils/anthropicApiKeyCheck';
 import {
-  buildClaudeProfileNameEntry,
+  buildClaudeProfileNameEntries,
   checkClaudeProfileLabel,
   claudeProfileLabelMaxLength,
   deriveClaudeProfileId,
   describeClaudeProfileIdProblem,
   findClaudeProfileByTypedName,
   normaliseClaudeProfileLabel,
+  resolveClaudeProfileCommandName,
   resolveClaudeProfileLabel,
   shortenClaudeProfileLabel,
   type ClaudeProfileIdProblem,
@@ -281,13 +282,17 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
 
   /** What an account is called on this screen: its display name, `default`'s «Main», else its id (`utils/claudeProfileLabels.ts`). */
   function formatLabel(name: string): string {
-    return resolveClaudeProfileLabel(name, getState().getClaudeProfileInfo(name)?.label);
+    return resolveClaudeProfileLabel(name, getState().getAllClaudeProfileInfos());
+  }
+
+  /** What a message tells the operator to type for an account: its name when that finds it, else its id (`resolveClaudeProfileCommandName`). */
+  function formatCommandName(name: string): string {
+    return resolveClaudeProfileCommandName(name, getState().getAllClaudeProfileInfos());
   }
 
   /** Every account the name rules look at — `default` (signed out or not: its id and «Main» in every language stay taken) and the added ones. */
   function listNameEntries(): ClaudeProfileNameEntry[] {
-    const names = [defaultClaudeProfileName, ...Object.keys(getState().getClaudeProfileRecords())];
-    return names.map((name) => buildClaudeProfileNameEntry(name, getState().getClaudeProfileInfo(name)?.label));
+    return buildClaudeProfileNameEntries(getState().getAllClaudeProfileInfos());
   }
 
   /** The account a typed name means — an id or a display name, case ignored — or `null`. */
@@ -370,7 +375,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     const label = formatLabel(profile.name);
     if (profile.configDir === null || !checkIsKnownProfile(profile.name)) return t('account.apiKeyNoDirectory', { name: label });
     const check = await verifyAnthropicApiKey(apiKey);
-    if (check === 'invalid') return t('account.apiKeyRejected', { name: label });
+    if (check === 'invalid') return t('account.apiKeyRejected', { name: label, login: formatCommandName(profile.name) });
     try {
       createClaudeProfileLayout({ dataDir: getDataDir(), name: profile.name });
       writeClaudeProfileApiKey(profile.configDir, apiKey);
@@ -485,7 +490,9 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
       ? t('accounts.openCodeNone')
       : t('accounts.openCodeSection', { list: formatProviderList(providers, isGeneral ? null : run.rung) });
     const isDefaultRemoved = getState().getClaudeProfileInfo(defaultClaudeProfileName)?.isRemoved === true;
-    const removedNote = isDefaultRemoved ? `\n\n${t('accounts.defaultRemovedNote', { name: formatLabel(defaultClaudeProfileName) })}` : '';
+    const removedNote = isDefaultRemoved
+      ? `\n\n${t('accounts.defaultRemovedNote', { name: formatLabel(defaultClaudeProfileName), login: formatCommandName(defaultClaudeProfileName) })}`
+      : '';
     // The usage hint (which says the percentages are USED) follows the account list it explains.
     const buttonsHint = t(isGeneral ? 'accounts.buttonsHintGeneral' : 'accounts.buttonsHint');
     const text = `${title}${removedNote}\n\n${t('account.usageHint')}\n\n${openCodeSection}\n\n${buttonsHint}\n\n${t('account.autoSwitchHint')}`;
@@ -565,7 +572,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     if (name !== defaultClaudeProfileName) {
       const status = await readClaudeAuthStatus(resolveDir(name));
       await recordProfileStatus(name, status);
-      if (status !== null && !status.loggedIn) return t('account.notLoggedIn', { name: formatLabel(name) });
+      if (status !== null && !status.loggedIn) return t('account.notLoggedIn', { name: formatLabel(name), login: formatCommandName(name) });
     }
     // An account billed to the API says so whenever it is picked: from now on that topic (or every topic following General) costs money per request.
     const meteredNote = readBilling(name) === 'api' ? `\n${t(isGeneral ? 'account.pickedApiGeneral' : 'account.pickedApi')}` : '';
@@ -693,7 +700,7 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     }
     await getState().upsertClaudeProfileRecord(defaultClaudeProfileName, { isRemoved: true, loggedIn: false });
     console.log(`[account] the default account was signed out (${isSignedOut ? 'login deleted' : 'no stored login found'})`);
-    return t('account.removedDefault', { name: formatLabel(defaultClaudeProfileName) });
+    return t('account.removedDefault', { name: formatLabel(defaultClaudeProfileName), login: formatCommandName(defaultClaudeProfileName) });
   }
 
   /** The text of a removal confirmation and its Yes / Back keyboard. */

@@ -462,7 +462,11 @@ no other account's name or id, case ignored) and derives the id (`pickNewProfile
 `rename` kind and the screen's message id: the next plain message is the new display name (same rules, its own name and id allowed — its id
 drops the label), stored by `setClaudeProfileLabel`, and the screen is re-rendered in place; `cancelProfileNameCapture` returns the kind it
 disarmed so `/esc` words the cancel (`account.renameCancelled`). Typed `use|login|remove <name>` resolve a display name or an id
-(`findClaudeProfileByTypedName`; an account wins over an OpenCode `provider/model` reading of a `/`). The provider rows carry an INDEX into the list snapshotted per screen MESSAGE
+(`findClaudeProfileByTypedName`; an account wins over an OpenCode `provider/model` reading of a `/`). Names are read off the whole
+registry (`getAllClaudeProfileInfos`): `default` unrenamed reads «Main (~/.claude)» while another account answers to a «Main» of any locale,
+and every command a message asks the operator to type (`{login}` in `account.notLoggedIn`, `account.login_failed`, `account.apiKeyRejected`,
+`accounts.defaultRemovedNote`, `account.removedDefault`, General's alert) is `resolveClaudeProfileCommandName`: the name only where it finds
+that very account, else the id. The provider rows carry an INDEX into the list snapshotted per screen MESSAGE
 (`providerSnapshots`, the newest 50): a tap asks for confirmation, the confirmation disconnects through the
 `disconnectOpenCodeProvider` port (`applyProviderDisconnect` of `modelProviders.ts`, flow unchanged), and an
 older screen resolves to «out of date» and a re-render. The providers come from the `detectOpenCodeProviders`

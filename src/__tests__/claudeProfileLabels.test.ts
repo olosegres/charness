@@ -14,6 +14,7 @@ import { runWithLocale } from '../i18n';
 import { checkIsValidClaudeProfileName, claudeProfileNameMaxLength } from '../utils/claudeProfiles';
 import { convertMarkdownToAdf, getAdfText } from '../connectors/jira/adf';
 import {
+  buildClaudeProfileNameEntries,
   buildClaudeProfileNameEntry,
   checkClaudeProfileLabel,
   claudeProfileLabelMaxLength,
@@ -21,9 +22,11 @@ import {
   describeClaudeProfileIdProblem,
   escapeClaudeProfileLabelForMarkdown,
   findClaudeProfileByTypedName,
+  getClaudeProfileCommandName,
   getClaudeProfileLabel,
   listMainClaudeProfileLabels,
   normaliseClaudeProfileLabel,
+  resolveClaudeProfileCommandName,
   resolveClaudeProfileLabel,
   setClaudeProfileLabelReader,
   shortenClaudeProfileLabel,
@@ -91,14 +94,14 @@ describe('claudeProfileLabels: checkClaudeProfileLabel', () => {
     assert.deepEqual(mains.slice(0, 3), ['Main', 'Hauptkonto', 'Principal'], 'en, de, fr (es and pt share «Principal»: once)');
     assert.equal(mains.length, new Set(mains).size);
     assert.ok(mains.includes('Основной') && mains.includes('Основний') && mains.includes('メイン'));
-    const russianDefault = runWithLocale('ru', () => buildClaudeProfileNameEntry('default', undefined));
+    const russianDefault = runWithLocale('ru', () => buildClaudeProfileNameEntry('default', {}));
     assert.equal(russianDefault.labels[0], 'Основной', 'the shown one first');
     assert.deepEqual([...russianDefault.labels].sort(), [...mains].sort());
     assert.deepEqual(checkClaudeProfileLabel({ label: 'main', selfName: null, accounts: [russianDefault, ...accounts.slice(1)] }), { kind: 'taken', label: 'Основной' });
-    const englishDefault = buildClaudeProfileNameEntry('default', undefined);
+    const englishDefault = buildClaudeProfileNameEntry('default', {});
     assert.deepEqual(checkClaudeProfileLabel({ label: 'основной', selfName: null, accounts: [englishDefault, ...accounts.slice(1)] }), { kind: 'taken', label: 'Main' }, 'an English topic refuses the Russian «Main» too');
     assert.equal(findClaudeProfileByTypedName('PRINCIPAL', [englishDefault, ...accounts.slice(1)]), 'default');
-    assert.deepEqual(buildClaudeProfileNameEntry('default', 'Personal'), { name: 'default', labels: ['Personal'] }, 'renamed: every «Main» is free again');
+    assert.deepEqual(buildClaudeProfileNameEntry('default', { default: { label: 'Personal' } }), { name: 'default', labels: ['Personal'] }, 'renamed: every «Main» is free again');
   });
 });
 
@@ -212,25 +215,57 @@ describe('claudeProfileLabels: escapeClaudeProfileLabelForMarkdown', () => {
 });
 
 describe('claudeProfileLabels: what an account is called', () => {
-  afterEach(() => setClaudeProfileLabelReader(() => undefined));
+  afterEach(() => setClaudeProfileLabelReader(() => ({})));
 
   it('its display name, else «Main» for `default` in the reader\'s language, else its id', () => {
-    assert.equal(resolveClaudeProfileLabel('work', 'Работа'), 'Работа');
-    assert.equal(resolveClaudeProfileLabel('work', undefined), 'work');
-    assert.equal(resolveClaudeProfileLabel('default', undefined), 'Main');
-    assert.equal(runWithLocale('ru', () => resolveClaudeProfileLabel('default', undefined)), 'Основной');
-    assert.equal(resolveClaudeProfileLabel('default', 'Personal'), 'Personal');
+    assert.equal(resolveClaudeProfileLabel('work', { work: { label: 'Работа' } }), 'Работа');
+    assert.equal(resolveClaudeProfileLabel('work', { work: {} }), 'work');
+    assert.equal(resolveClaudeProfileLabel('default', {}), 'Main');
+    assert.equal(runWithLocale('ru', () => resolveClaudeProfileLabel('default', {})), 'Основной');
+    assert.equal(resolveClaudeProfileLabel('default', { default: { label: 'Personal' } }), 'Personal');
   });
 
   it('a stored value that is no usable name (a hand edit: blank, not a string) counts as none', () => {
-    assert.equal(resolveClaudeProfileLabel('work', '   '), 'work');
-    assert.equal(resolveClaudeProfileLabel('work', 42), 'work');
+    assert.equal(resolveClaudeProfileLabel('work', { work: { label: '   ' } }), 'work');
+    assert.equal(resolveClaudeProfileLabel('work', { work: { label: 42 } }), 'work');
   });
 
-  it('the screens read the registered store, and show ids until one is registered', () => {
+  it('~/.claude is «Main (~/.claude)» while another account answers to a «Main» of any locale — an id `main` from before display names, `principal`, or such a display name — and «Main» again once none does', () => {
+    for (const records of [{ main: {} }, { principal: {} }, { x: { label: 'Основной' } }, { y: { label: 'MAIN' } }]) {
+      assert.equal(resolveClaudeProfileLabel('default', records), 'Main (~/.claude)', JSON.stringify(records));
+      assert.equal(runWithLocale('ru', () => resolveClaudeProfileLabel('default', records)), 'Основной (~/.claude)', JSON.stringify(records));
+    }
+    assert.equal(resolveClaudeProfileLabel('default', { mainline: {}, default: {} }), 'Main', 'a longer id is no claim');
+    assert.equal(resolveClaudeProfileLabel('default', { default: { label: 'Personal' }, main: {} }), 'Personal', 'a name of its own needs no telling apart');
+    assert.equal(resolveClaudeProfileLabel('main', { main: {} }), 'main');
+  });
+
+  it('each typed name finds its own account: the claimed «Main» goes to the account that claims it, ~/.claude answers to the rest and to its shown name', () => {
+    const byId = buildClaudeProfileNameEntries({ main: {} });
+    assert.deepEqual(byId.map((entry) => entry.name), ['default', 'main'], '`default` first, always');
+    assert.equal(findClaudeProfileByTypedName('Main', byId), 'main');
+    assert.equal(findClaudeProfileByTypedName('main (~/.claude)', byId), 'default');
+    assert.equal(findClaudeProfileByTypedName('Основной', byId), 'default');
+    const byLabel = buildClaudeProfileNameEntries({ x: { label: 'Основной' } });
+    assert.equal(findClaudeProfileByTypedName('основной', byLabel), 'x', 'not ~/.claude, which is listed first');
+    assert.equal(findClaudeProfileByTypedName('Main', byLabel), 'default');
+  });
+
+  it('a command a message asks for types the shown name only when it finds that very account, else the id', () => {
+    const records = { main: {}, twin: {}, 'twin-2': { label: 'Twin' }, work: { label: 'Sergei.Solo@work' } };
+    assert.equal(resolveClaudeProfileCommandName('default', records), 'Main (~/.claude)');
+    assert.equal(resolveClaudeProfileCommandName('main', records), 'main');
+    assert.equal(resolveClaudeProfileCommandName('twin', records), 'twin');
+    assert.equal(resolveClaudeProfileCommandName('twin-2', records), 'twin-2', '«Twin» would find `twin` (an id wins)');
+    assert.equal(resolveClaudeProfileCommandName('work', records), 'Sergei.Solo@work');
+    assert.equal(resolveClaudeProfileCommandName('default', {}), 'Main');
+  });
+
+  it('the screens read the registered registry, and show ids until one is registered', () => {
     assert.equal(getClaudeProfileLabel('work'), 'work');
-    setClaudeProfileLabelReader((name) => (name === 'work' ? 'Sergei.Solo@work' : undefined));
+    setClaudeProfileLabelReader(() => ({ work: { label: 'Sergei.Solo@work' }, main: {} }));
     assert.equal(getClaudeProfileLabel('work'), 'Sergei.Solo@work');
-    assert.equal(getClaudeProfileLabel('default'), 'Main');
+    assert.equal(getClaudeProfileLabel('default'), 'Main (~/.claude)');
+    assert.equal(getClaudeProfileCommandName('default'), 'Main (~/.claude)');
   });
 });

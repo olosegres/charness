@@ -217,33 +217,85 @@ export function readStoredClaudeProfileLabel(value: unknown): string | undefined
   return label === '' ? undefined : label;
 }
 
-/** @description What an account is called: its display name, else «Main» for `default`, else its id. */
-export function resolveClaudeProfileLabel(name: string, storedLabel: unknown): string {
-  return readStoredClaudeProfileLabel(storedLabel) ?? (name === defaultClaudeProfileName ? getMainClaudeProfileLabel() : name);
+/**
+ * The registry as the names are read off it: every account's record by its id — `default`'s hidden one included when it exists —, of
+ * which only the stored display name matters (`state.json` `claudeProfiles`).
+ */
+export type ClaudeProfileLabelRecords = Readonly<Record<string, { label?: unknown } | undefined>>;
+
+/**
+ * The «Main» names (any locale) another account already answers to — by its id (an account added before display names, `main`, or
+ * `principal`) or by its display name. While one is, `default` unrenamed is not shown by that word alone, and does not answer to it.
+ */
+function listClaimedMainLabelKeys(records: ClaudeProfileLabelRecords): Set<string> {
+  const mainKeys = new Set(listMainClaudeProfileLabels().map(getComparisonKey));
+  const claimed = new Set<string>();
+  for (const [name, record] of Object.entries(records)) {
+    if (name === defaultClaudeProfileName) continue;
+    for (const known of [name, readStoredClaudeProfileLabel(record?.label)]) {
+      if (known !== undefined && mainKeys.has(getComparisonKey(known))) claimed.add(getComparisonKey(known));
+    }
+  }
+  return claimed;
 }
 
-/** Where {@link getClaudeProfileLabel} reads an account's stored display name from (`state.json`); `undefined` = none. */
-export type ClaudeProfileLabelReader = (name: string) => unknown;
-
-let labelReader: ClaudeProfileLabelReader = () => undefined;
-
-/** @description Register where {@link getClaudeProfileLabel} reads the stored display names from (the bot, once, at start-up). Until then every account shows its id (`default` «Main»). */
-export function setClaudeProfileLabelReader(reader: ClaudeProfileLabelReader): void {
-  labelReader = reader;
-}
-
-/** @description What the account `name` is called on a screen, in the active locale ({@link resolveClaudeProfileLabel} of its stored name). */
-export function getClaudeProfileLabel(name: string): string {
-  return resolveClaudeProfileLabel(name, labelReader(name));
+/**
+ * @description What the account `name` is called, read off the whole registry: its display name, else its id — and for `default`
+ * «Main» in the reader's language, or «Main (~/.claude)» while another account answers to a «Main» of any locale (an account `main`
+ * added before display names existed), so the two never look alike or share a typed name.
+ */
+export function resolveClaudeProfileLabel(name: string, records: ClaudeProfileLabelRecords): string {
+  const stored = readStoredClaudeProfileLabel(records[name]?.label);
+  if (stored !== undefined) return stored;
+  if (name !== defaultClaudeProfileName) return name;
+  const main = getMainClaudeProfileLabel();
+  return listClaimedMainLabelKeys(records).size > 0 ? `${main} (~/.claude)` : main;
 }
 
 /**
  * @description The name-rule entry of an account ({@link ClaudeProfileNameEntry}): its shown name, and — for `default` with no name of
- * its own — «Main» in every locale besides it ({@link listMainClaudeProfileLabels}), so a typed `основной` finds it in any topic and no
- * other account takes any of them.
+ * its own — «Main» in every locale besides it ({@link listMainClaudeProfileLabels}) but those another account answers to, so a typed
+ * `основной` finds it in any topic and no other account takes any of them.
  */
-export function buildClaudeProfileNameEntry(name: string, storedLabel: unknown): ClaudeProfileNameEntry {
-  const shown = resolveClaudeProfileLabel(name, storedLabel);
-  const isMainShown = name === defaultClaudeProfileName && readStoredClaudeProfileLabel(storedLabel) === undefined;
-  return { name, labels: isMainShown ? [shown, ...listMainClaudeProfileLabels().filter((main) => main !== shown)] : [shown] };
+export function buildClaudeProfileNameEntry(name: string, records: ClaudeProfileLabelRecords): ClaudeProfileNameEntry {
+  const shown = resolveClaudeProfileLabel(name, records);
+  if (name !== defaultClaudeProfileName || readStoredClaudeProfileLabel(records[name]?.label) !== undefined) return { name, labels: [shown] };
+  const claimed = listClaimedMainLabelKeys(records);
+  return { name, labels: [shown, ...listMainClaudeProfileLabels().filter((main) => main !== shown && !claimed.has(getComparisonKey(main)))] };
+}
+
+/** @description The name-rule entries of every account: `default` (always — signed out or not, its id and names stay taken) first, then the added ones. */
+export function buildClaudeProfileNameEntries(records: ClaudeProfileLabelRecords): ClaudeProfileNameEntry[] {
+  const names = [defaultClaudeProfileName, ...Object.keys(records).filter((name) => name !== defaultClaudeProfileName)];
+  return names.map((name) => buildClaudeProfileNameEntry(name, records));
+}
+
+/**
+ * @description What a message tells the operator to TYPE for the account `name` (`/accounts login <it>`): its shown name when that name
+ * finds this very account ({@link findClaudeProfileByTypedName}), else its id — a name another account answers to first (an account
+ * adopted from a folder `work` beside one called «Work») would send the command elsewhere.
+ */
+export function resolveClaudeProfileCommandName(name: string, records: ClaudeProfileLabelRecords): string {
+  const label = resolveClaudeProfileLabel(name, records);
+  return findClaudeProfileByTypedName(label, buildClaudeProfileNameEntries(records)) === name ? label : name;
+}
+
+/** Where {@link getClaudeProfileLabel} reads the registry from (`state.json`'s profile records). */
+export type ClaudeProfileLabelReader = () => ClaudeProfileLabelRecords;
+
+let labelReader: ClaudeProfileLabelReader = () => ({});
+
+/** @description Register where {@link getClaudeProfileLabel} reads the registry from (the bot, once, at start-up). Until then every account shows its id (`default` «Main»). */
+export function setClaudeProfileLabelReader(reader: ClaudeProfileLabelReader): void {
+  labelReader = reader;
+}
+
+/** @description What the account `name` is called on a screen, in the active locale ({@link resolveClaudeProfileLabel} over the registered registry). */
+export function getClaudeProfileLabel(name: string): string {
+  return resolveClaudeProfileLabel(name, labelReader());
+}
+
+/** @description What a message tells the operator to type for the account `name` ({@link resolveClaudeProfileCommandName} over the registered registry). */
+export function getClaudeProfileCommandName(name: string): string {
+  return resolveClaudeProfileCommandName(name, labelReader());
 }

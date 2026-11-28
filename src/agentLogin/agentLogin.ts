@@ -9,7 +9,7 @@ import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { getOpenCodeChildEnv } from '../installManager';
 import { t } from '../i18n';
-import { getClaudeProfileLabel } from '../utils/claudeProfileLabels';
+import { getClaudeProfileCommandName, getClaudeProfileLabel } from '../utils/claudeProfileLabels';
 import { type IPty, spawn as spawnPty } from 'node-pty';
 import { resolveClaudeBinary, resolveOpenCodeBinary } from '../utils/resolveBinary';
 import {
@@ -419,7 +419,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
       await onClaudeProfileAuthStatus?.(key, pending.profile, status);
       // The `default` profile IS the `~/.claude` login: a success retires the pinned logged-out notice, as `/login` does.
       if (isSucceeded && pending.profile.configDir === null) clearAuthNotice(key);
-      await replyToThread(key, isSucceeded ? formatProfileLoginSuccess(pending.profile, status) : t('account.login_failed', { name: getClaudeProfileLabel(pending.profile.name) }));
+      await replyToThread(key, isSucceeded ? formatProfileLoginSuccess(pending.profile, status) : t('account.login_failed', { name: getClaudeProfileLabel(pending.profile.name), login: getClaudeProfileCommandName(pending.profile.name) }));
       return;
     }
     if (isSucceeded) {

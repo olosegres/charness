@@ -74,6 +74,12 @@ test('every round of the accounts\' states tells the operator and resumes the wa
     /runWithLocale\('en', \(\) => renderClaudeAccountAlert\(alert, getHostClaudeSignInHow, \{ formatLabel: escapeClaudeProfileLabelForMarkdown \}\)\)/,
     'a connector\'s channel reads English and the host\'s sign-in, and its Markdown shows the display names as written',
   );
+  const general = getFunctionBody('postClaudeAccountAlertToGeneral');
+  assert.match(
+    general,
+    /renderClaudeAccountAlert\(alert, \(name\) => `\/accounts login \$\{getClaudeProfileCommandName\(name\)\}`, renderOptions\)/,
+    'General\'s alert asks for a command that reaches the very account it is about (its name, or its id where the name finds another account)',
+  );
   const resume = getFunctionBody('resumeConversationsWaitingForAccount');
   assertOrder(resume, 'applyClaudeProfileToThread(key, { isAfterLimit: true })', 'resumeTopicOnNewSession(key,', 'moved onto an account that works before the continue prompt');
 });

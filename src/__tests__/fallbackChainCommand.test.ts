@@ -225,7 +225,7 @@ describe('fallbackChain: /limits over its ports', () => {
   });
 
   it('an account is named by what the operator calls it — on its rung, in «add» and on the model step — while every button keeps its id', async () => {
-    setClaudeProfileLabelReader((name) => (name === 'work' ? 'Sergei.Solo@work' : undefined));
+    setClaudeProfileLabelReader(() => ({ work: { label: 'Sergei.Solo@work' } }));
     const savedDetection = detection;
     detection = { ...savedDetection, claudeProfiles: savedDetection.claudeProfiles.map((view) => (view.name === 'work' ? { ...view, label: 'Sergei.Solo@work' } : view)) };
     try {
@@ -245,7 +245,7 @@ describe('fallbackChain: /limits over its ports', () => {
       await harness.tapButton(pickerId, 'fbk_back');
     } finally {
       detection = savedDetection;
-      setClaudeProfileLabelReader(() => undefined);
+      setClaudeProfileLabelReader(() => ({}));
     }
   });
 

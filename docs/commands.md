@@ -143,10 +143,15 @@ so one account's usage limit does not stop every topic.
   hold). No two accounts share a display name (case ignored), and a display name may not
   be another account's id; while `~/.claude` has no name of its own, «Main» in every one of
   the bot's languages (`Основной`, `Principal`, …) counts as its name, whatever the topic's
-  language, so a typed `/accounts use|login|remove <name>` always finds one
-  account by either. An account added before display names existed, or adopted from a
+  language. A typed `/accounts use|login|remove <name>` finds one account: an id first, then
+  a display name. An account added before display names existed, or adopted from a
   folder, shows its id until you rename it; renaming an account back to its id gives it no
-  display name of its own («Main» again for `~/.claude`).
+  display name of its own («Main» again for `~/.claude`). Where an older account already
+  answers to a «Main» (an id `main` or `principal` from before display names), `~/.claude`
+  reads «Main (~/.claude)» until one of them is renamed, and each answers to its own name.
+  A message that asks you to type a command (`/accounts login …`) names the account so that
+  the command reaches it: its display name, or its id where that name would find another
+  account first (a folder `work` adopted next to an account called «Work»).
 - **Adding an account:** `/accounts` → «➕ Claude account» (or `/accounts add Work`) — give it
   a name, then open the sign-in link the bot posts **in a browser that is
   signed in as that other account** (an incognito window or another browser

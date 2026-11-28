@@ -1183,6 +1183,39 @@ describe('claudeAccounts: /accounts over its ports', () => {
     assert.equal(startedLogins.length, startedBefore, 'no account was added');
   });
 
+  it('an account added before display names with the id `main` never shares ~/.claude\'s name: ~/.claude reads «Main (~/.claude)», each typed name finds its own account, and a hint names a command that reaches the account it is about', async () => {
+    // Before display names an operator could add a profile `main`; it has no display name, so it shows its id.
+    fs.mkdirSync(path.join(dataDir, 'claude-profiles', 'main'), { recursive: true });
+    await harness.state.upsertClaudeProfileRecord('main', { createdAt: '2026-01-01T00:00:00.000Z', loggedIn: true, email: 'old@example.com', subscriptionType: 'pro' });
+    const mainDir = path.join(dataDir, 'claude-profiles', 'main');
+    setStatus(mainDir, { loggedIn: true, email: 'old@example.com', subscriptionType: 'pro', orgName: null, authMethod: 'claude.ai', apiKeySource: null, billing: 'subscription' });
+    try {
+      await harness.runCommand('accounts');
+      const text = harness.replies.at(-1)?.text ?? '';
+      assert.match(text, /\n[✓•] Main \(~\/\.claude\) — me@example\.com/, `~/.claude is told apart: ${text}`);
+      assert.match(text, /\n[✓•] main — old@example\.com/);
+      const startedBefore = startedLogins.length;
+      await harness.runCommand('accounts', 'login Main (~/.claude)');
+      assert.deepEqual(startedLogins.at(-1)?.profile, { name: 'default', configDir: null }, 'the shown name finds ~/.claude');
+      await harness.runCommand('accounts', 'login main');
+      assert.equal(startedLogins.at(-1)?.profile.name, 'main', 'the id finds the added account');
+      assert.equal(startedLogins.length, startedBefore + 2);
+
+      // An account adopted from a folder by its id (`twin`) next to an account the operator called «Twin»: a hint about «Twin» types its id.
+      await harness.state.upsertClaudeProfileRecord('twin', { createdAt: '2026-01-02T00:00:00.000Z', loggedIn: true });
+      await harness.state.upsertClaudeProfileRecord('twin-2', { createdAt: '2026-01-03T00:00:00.000Z', loggedIn: false, label: 'Twin' });
+      const twinDir = path.join(dataDir, 'claude-profiles', 'twin-2');
+      setStatus(twinDir, { loggedIn: false, email: null, subscriptionType: null, orgName: null, authMethod: 'none', apiKeySource: null, billing: null });
+      await harness.runCommand('accounts', 'use twin-2');
+      assert.equal(harness.replies.at(-1)?.text, '⚠️ Profile Twin is not signed in. Run /accounts login twin-2 first.', '«Twin» typed would reach `twin`: the hint types the id');
+      await harness.runCommand('accounts', 'use main');
+      assert.ok(!(harness.replies.at(-1)?.text ?? '').includes('login main (~'), 'a name that finds its own account is typed as it is');
+    } finally {
+      for (const name of ['main', 'twin', 'twin-2']) await harness.state.removeClaudeProfileRecord(name);
+      fs.rmSync(mainDir, { recursive: true, force: true });
+    }
+  });
+
   it('➕ takes any name: the id is derived from it (a number on a clash), the name is shown and kept, the sign-in runs under the id; `id:<id>` picks the id by hand', async () => {
     await harness.runCommand('accounts');
     await harness.tapButton(harness.replies.at(-1)!.messageId!, 'acct_add');

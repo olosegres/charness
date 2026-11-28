@@ -23,11 +23,13 @@ export function buildClaudeProfileUsageView(input: {
   record: ClaudeProfileRecord | undefined;
   /** The operator's credit figure for it (`readClaudeApiCreditAnchors`); `undefined` = none given. */
   creditAnchor?: ClaudeApiCreditAnchor;
+  /** Every record, for the name (`default`'s «Main» reads the others, `utils/claudeProfileLabels.ts`); absent = this record alone. */
+  records?: Readonly<Record<string, ClaudeProfileRecord>>;
 }): ClaudeProfileUsageView {
   const { name, record, creditAnchor } = input;
   return {
     name,
-    label: resolveClaudeProfileLabel(name, record?.label),
+    label: resolveClaudeProfileLabel(name, input.records ?? (record ? { [name]: record } : {})),
     configDir: resolveClaudeProfileDir(input.dataDir, name),
     // A refusal by the CLI counts as signed out until the account is signed in again (`utils/claudeAuthRefusal.ts`).
     loggedIn: getClaudeProfileSignedIn(record),
@@ -64,7 +66,7 @@ export function buildClaudeProfileUsageViews(input: {
   // A `default` the operator signed out through /accounts stays out of every ranking until it is signed in again.
   const isDefaultRemoved = input.records.default?.isRemoved === true;
   const toView = (name: string, record: ClaudeProfileRecord | undefined): ClaudeProfileUsageView =>
-    buildClaudeProfileUsageView({ dataDir: input.dataDir, name, record, creditAnchor: input.creditAnchors?.[name] });
+    buildClaudeProfileUsageView({ dataDir: input.dataDir, name, record, creditAnchor: input.creditAnchors?.[name], records: input.records });
   const added = Object.entries(input.records)
     .filter(([name]) => name !== 'default')
     .sort(([, a], [, b]) => a.createdAt.localeCompare(b.createdAt));

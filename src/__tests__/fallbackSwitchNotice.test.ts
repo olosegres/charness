@@ -133,10 +133,10 @@ describe('a move off an account the CLI refused (English)', () => {
 });
 
 describe('the accounts are named by what the operator calls them (utils/claudeProfileLabels.ts)', () => {
-  afterEach(() => setClaudeProfileLabelReader(() => undefined));
+  afterEach(() => setClaudeProfileLabelReader(() => ({})));
 
   it('a renamed account by its display name, ~/.claude as «Main» in the reader\'s language — never by the id', () => {
-    setClaudeProfileLabelReader((name) => (name === 'work' ? 'Sergei.Solo@work' : undefined));
+    setClaudeProfileLabelReader(() => ({ work: { label: 'Sergei.Solo@work' } }));
     assert.equal(
       buildFallbackSwitchedNotice({ from: claude('default'), to: claude('work'), resetTime: null, runningModel: null }),
       '🔁 Account «Main» hit its usage limit — this topic continues on «Sergei.Solo@work». Switch: /limits',

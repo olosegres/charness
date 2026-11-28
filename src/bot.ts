@@ -356,7 +356,7 @@ import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, creat
 import { readTaskAgentLimit, type TaskAgentLimitSources } from './trackers/taskAgentLimit';
 import { TaskAgentSlots } from './trackers/taskAgentSlots';
 import { checkIsBotSkillsEnabled, createBotSkillsReader, readBotSkillsInstanceValue, setBotSkillsReader, type BotSkillsSources } from './utils/botSkills';
-import { escapeClaudeProfileLabelForMarkdown, getClaudeProfileLabel, setClaudeProfileLabelReader } from './utils/claudeProfileLabels';
+import { escapeClaudeProfileLabelForMarkdown, getClaudeProfileCommandName, getClaudeProfileLabel, setClaudeProfileLabelReader } from './utils/claudeProfileLabels';
 import { quietPeriodMs } from './selfUpdate/constants';
 import { getLaunchEnvironment } from './selfUpdate/launchEnvironment';
 import { createDefaultReexecDeps, reexecProcess } from './selfUpdate/restart';
@@ -9299,7 +9299,7 @@ async function deliverClaudeAccountAlert(alert: ClaudeAccountAlert): Promise<voi
 
 /**
  * @description The account alert in General, like the updater's: worded in that chat's language, the sign-in named as
- * `/accounts login <display name>`; an alert that asks to act is pinned (the pin is what reaches a muted operator) in place of the previous
+ * `/accounts login <display name>` (its id when that name would find another account); an alert that asks to act is pinned (the pin is what reaches a muted operator) in place of the previous
  * one, and once no told account is left unusable the pin goes. `isPrivateChatClosed`: Telegram refused the private message about a
  * signed-out account (403) — the alert then also asks the operator to open a private chat with the bot.
  */
@@ -9310,7 +9310,7 @@ async function postClaudeAccountAlertToGeneral(alert: ClaudeAccountAlert, option
     return;
   }
   const renderOptions = options.isPrivateChatClosed ? { closedPrivateChatBot: getBotLabel() } : {};
-  const text = withThreadLocale(generalKey, () => renderClaudeAccountAlert(alert, (name) => `/accounts login ${getClaudeProfileLabel(name)}`, renderOptions));
+  const text = withThreadLocale(generalKey, () => renderClaudeAccountAlert(alert, (name) => `/accounts login ${getClaudeProfileCommandName(name)}`, renderOptions));
   const messageId = await replyToThread(generalKey, text);
   if (alert.lost.length === 0 || messageId === null) {
     await releaseClaudeAccountAlertPin();
@@ -9758,7 +9758,7 @@ function getClaudeProfileUsageViews(): ClaudeProfileUsageView[] {
 
 /** One profile's usage view — the very one `/limits` renders, for the rows of `/accounts`. */
 function getClaudeProfileUsageView(name: string): ClaudeProfileUsageView {
-  return buildClaudeProfileUsageView({ dataDir: resolveDataDir(), name, record: state.getClaudeProfileInfo(name), creditAnchor: syncClaudeApiCreditAnchors()[name] });
+  return buildClaudeProfileUsageView({ dataDir: resolveDataDir(), name, record: state.getClaudeProfileInfo(name), creditAnchor: syncClaudeApiCreditAnchors()[name], records: state.getAllClaudeProfileInfos() });
 }
 
 /** The model a topic's Claude session runs (or last ran), for the usage ranking's choice of windows. */
@@ -17132,7 +17132,7 @@ export async function startBot(): Promise<void> {
   // The «Bot skills» switch (`/bot_skills`): every agent start, the OpenCode server's start and the bot MCP's instructions read it.
   setBotSkillsReader(botSkillsReader);
   // Every screen that names a Claude account shows its display name (`/accounts` ✏️), read live off the registry.
-  setClaudeProfileLabelReader((name) => state.getClaudeProfileInfo(name)?.label);
+  setClaudeProfileLabelReader(() => state.getAllClaudeProfileInfos());
   // The flags the CLI's and OpenCode's own compactions read for `/compact_self_review` follow the saved settings from the start.
   syncAllCompactSelfReviewFlags();
   registerClaudeRateLimitSink(onClaudeRateLimitEvent);

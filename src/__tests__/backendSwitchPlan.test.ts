@@ -62,12 +62,12 @@ describe('the question (English)', () => {
       buildBackendSwitchQuestion({ from: 'opencode', target: { backend: 'claude', profile: 'default', isProfilePicked: false, model: null } }),
       `🔁 Switch this topic from OpenCode to Claude «Main»?\n${handoverLine}`,
     );
-    setClaudeProfileLabelReader((name) => (name === 'work' ? 'Sergei.Solo@work' : undefined));
+    setClaudeProfileLabelReader(() => ({ work: { label: 'Sergei.Solo@work' } }));
     try {
       assert.equal(formatBackendSwitchTarget({ backend: 'claude', profile: 'work', isProfilePicked: true, model: 'sonnet' }), 'Claude «Sergei.Solo@work» (sonnet)');
       assert.equal(formatBackendSwitchBridgeLabel({ backend: 'claude', profile: 'work', isProfilePicked: true, model: null }), 'Claude · work', 'the agent\'s bridge keeps the id');
     } finally {
-      setClaudeProfileLabelReader(() => undefined);
+      setClaudeProfileLabelReader(() => ({}));
     }
     assert.equal(
       buildBackendSwitchQuestion({ from: 'claude', target: { backend: 'opencode', modelLabel: 'openai/gpt-5', model: null } }),
