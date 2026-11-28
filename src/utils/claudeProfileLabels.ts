@@ -180,6 +180,18 @@ export function describeClaudeProfileIdProblem(name: string): ClaudeProfileIdPro
 
 // ── what the screens show ──
 
+/** The ASCII punctuation a display name may hold that Markdown reads as inline markup (emphasis, code, links, HTML, strikethrough, tables). */
+const markdownInlinePunctuationRe = /[\\`*_[\]<>~|]/g;
+
+/**
+ * @description A display name as a Markdown text (a Jira comment, which the connector renders through Markdown) shows it: every character
+ * Markdown could read as inline markup is backslash-escaped, so `my_work*` reads as written, never as emphasis or a link. The Telegram
+ * screens send plain text and need none of it.
+ */
+export function escapeClaudeProfileLabelForMarkdown(label: string): string {
+  return label.replace(markdownInlinePunctuationRe, (character) => `\\${character}`);
+}
+
 /** «Main» — what `default` (`~/.claude`) is called until the operator renames it, in the reader's language. */
 export function getMainClaudeProfileLabel(): string {
   return t('account.mainLabel');

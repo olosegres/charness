@@ -130,27 +130,31 @@ export function formatClaudeAccountRefusal(usability: Exclude<ClaudeProfileUsabi
  * the CLI's words when there are any and what to do; then one line on where the conversations went — and, when
  * `options.closedPrivateChatBot` names the bot (the operator's private chat refused the private message about a signed-out account:
  * they never opened it), one line asking them to open a private chat with it and press Start; an account usable again one line.
+ * `options.formatLabel` turns each display name into the channel's text (a Markdown channel escapes it).
  */
 export function renderClaudeAccountAlert(
   alert: ClaudeAccountAlert,
   getSignInHow: (name: string) => string,
-  options: { closedPrivateChatBot?: string } = {},
+  options: { closedPrivateChatBot?: string; formatLabel?: (label: string) => string } = {},
 ): string {
+  // A channel that renders Markdown (the Jira operator issue) escapes the operator's free-text names; Telegram's plain text needs nothing.
+  const formatLabel = options.formatLabel ?? ((label: string) => label);
+  const nameOf = (name: string): string => formatLabel(getClaudeProfileLabel(name));
   const paragraphs: string[] = [];
   for (const loss of alert.lost) {
-    const lines = [t('accounts.alert.title', { name: getClaudeProfileLabel(loss.name), reason: formatClaudeAccountRefusal(loss.usability) })];
+    const lines = [t('accounts.alert.title', { name: nameOf(loss.name), reason: formatClaudeAccountRefusal(loss.usability) })];
     if (loss.detail !== null) lines.push(t('accounts.alert.cliSaid', { detail: loss.detail }));
     const how = getSignInHow(loss.name);
     lines.push(loss.usability === 'orgDisabled' ? t('accounts.alert.fixOrg', { how }) : t('accounts.alert.fixSignIn', { how }));
     paragraphs.push(lines.join('\n'));
   }
   if (alert.lost.length > 0) {
-    paragraphs.push(alert.instead === null ? t('accounts.alert.noneUsable') : t('accounts.alert.movedTo', { to: getClaudeProfileLabel(alert.instead) }));
+    paragraphs.push(alert.instead === null ? t('accounts.alert.noneUsable') : t('accounts.alert.movedTo', { to: nameOf(alert.instead) }));
   }
   if (options.closedPrivateChatBot !== undefined && listClaudeAccountSignOutNames(alert).length > 0) {
     paragraphs.push(t('accounts.alert.openPrivateChat', { bot: options.closedPrivateChatBot }));
   }
-  for (const name of alert.back) paragraphs.push(t('accounts.alert.back', { name: getClaudeProfileLabel(name) }));
+  for (const name of alert.back) paragraphs.push(t('accounts.alert.back', { name: nameOf(name) }));
   return paragraphs.join('\n\n');
 }
 

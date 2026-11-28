@@ -356,7 +356,7 @@ import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, creat
 import { readTaskAgentLimit, type TaskAgentLimitSources } from './trackers/taskAgentLimit';
 import { TaskAgentSlots } from './trackers/taskAgentSlots';
 import { checkIsBotSkillsEnabled, createBotSkillsReader, readBotSkillsInstanceValue, setBotSkillsReader, type BotSkillsSources } from './utils/botSkills';
-import { getClaudeProfileLabel, setClaudeProfileLabelReader } from './utils/claudeProfileLabels';
+import { escapeClaudeProfileLabelForMarkdown, getClaudeProfileLabel, setClaudeProfileLabelReader } from './utils/claudeProfileLabels';
 import { quietPeriodMs } from './selfUpdate/constants';
 import { getLaunchEnvironment } from './selfUpdate/launchEnvironment';
 import { createDefaultReexecDeps, reexecProcess } from './selfUpdate/restart';
@@ -9288,7 +9288,8 @@ async function deliverClaudeAccountAlert(alert: ClaudeAccountAlert): Promise<voi
   if (ENV.isTelegramServed) posts.push(postClaudeAccountAlertToTelegram(alert));
   const isActionRequired = alert.lost.length > 0;
   for (const channel of operatorAlertChannels) {
-    const text = runWithLocale('en', () => renderClaudeAccountAlert(alert, getHostClaudeSignInHow));
+    // The connectors' channels render Markdown (a Jira comment): the operator's free-text names are escaped there.
+    const text = runWithLocale('en', () => renderClaudeAccountAlert(alert, getHostClaudeSignInHow, { formatLabel: escapeClaudeProfileLabelForMarkdown }));
     posts.push(channel.post(text, { isActionRequired }).then((result) => {
       if (!result.ok) console.warn(`[accounts] the operator alert did not reach ${channel.label}: ${result.error}`);
     }));
@@ -9476,7 +9477,8 @@ async function handleClaudeAuthRefusal(key: SessionKey, cls: AgentApiErrorClass)
   if (!checkIsTelegramKey(key) && requestLimitWaitAnswerDeps) {
     await answerOpenRequestsWithBotNotice(requestLimitWaitAnswerDeps, key, {
       identity: `claudeAccountMove:${instead}`,
-      body: t('requests.account.movedAnswer', { from: getClaudeProfileLabel(from.profile), reason: formatClaudeAccountRefusal(reason), to: getClaudeProfileLabel(instead) }),
+      // A tracker's comment renders Markdown: the operator's free-text names are escaped.
+      body: t('requests.account.movedAnswer', { from: escapeClaudeProfileLabelForMarkdown(getClaudeProfileLabel(from.profile)), reason: formatClaudeAccountRefusal(reason), to: escapeClaudeProfileLabelForMarkdown(getClaudeProfileLabel(instead)) }),
       isWakeStopped: false,
     }).catch((e) => console.warn(`[accounts] ${k}: telling the requests about the move failed:`, e instanceof Error ? e.message : e));
   }
@@ -9504,7 +9506,7 @@ async function waitForClaudeAccount(key: SessionKey): Promise<void> {
   }
   const reasons = getClaudeProfileUsageViews()
     .map((view) => ({ name: view.name, usability: getClaudeProfileUsability(state.getClaudeProfileInfo(view.name)) }))
-    .flatMap(({ name, usability }) => (usability === 'usable' ? [] : [`«${getClaudeProfileLabel(name)}» ${formatClaudeAccountRefusal(usability)}`]))
+    .flatMap(({ name, usability }) => (usability === 'usable' ? [] : [`«${escapeClaudeProfileLabelForMarkdown(getClaudeProfileLabel(name))}» ${formatClaudeAccountRefusal(usability)}`]))
     .join('; ');
   await answerOpenRequestsWithBotNotice(requestLimitWaitAnswerDeps, key, {
     // One wait, one answer per request: a later refused turn of the same wait (a new request's prompt) answers only the new request.

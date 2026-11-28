@@ -12,12 +12,14 @@ import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { runWithLocale } from '../i18n';
 import { checkIsValidClaudeProfileName, claudeProfileNameMaxLength } from '../utils/claudeProfiles';
+import { convertMarkdownToAdf, getAdfText } from '../connectors/jira/adf';
 import {
   buildClaudeProfileNameEntry,
   checkClaudeProfileLabel,
   claudeProfileLabelMaxLength,
   deriveClaudeProfileId,
   describeClaudeProfileIdProblem,
+  escapeClaudeProfileLabelForMarkdown,
   findClaudeProfileByTypedName,
   getClaudeProfileLabel,
   normaliseClaudeProfileLabel,
@@ -181,6 +183,23 @@ describe('claudeProfileLabels: describeClaudeProfileIdProblem', () => {
     assert.deepEqual(describeClaudeProfileIdProblem('default'), { kind: 'reserved' });
     assert.deepEqual(describeClaudeProfileIdProblem('a'.repeat(claudeProfileNameMaxLength + 1)), { kind: 'tooLong', max: claudeProfileNameMaxLength });
     assert.equal(describeClaudeProfileIdProblem('work_2-b'), null);
+  });
+});
+
+describe('claudeProfileLabels: escapeClaudeProfileLabelForMarkdown', () => {
+  it('escapes what Markdown reads as inline markup, and a Jira comment then shows the name as written, unformatted and with no link', () => {
+    // (A bare web address would still be linked by Jira's autolinking, to the safe target it names: not markup the name could hide.)
+    const label = 'my_work*[x](y) **b** `a` <b> ~s~ | \\';
+    const escaped = escapeClaudeProfileLabelForMarkdown(label);
+    assert.equal(escaped, 'my\\_work\\*\\[x\\](y) \\*\\*b\\*\\* \\`a\\` \\<b\\> \\~s\\~ \\| \\\\');
+    const document = convertMarkdownToAdf(`Moved to «${escaped}».`);
+    assert.equal(getAdfText(document).trim(), `Moved to «${label}».`);
+    const marks = JSON.stringify(document).match(/"marks"/g) ?? [];
+    assert.equal(marks.length, 0, `no emphasis, code or link mark: ${JSON.stringify(document)}`);
+  });
+
+  it('leaves a name with no such character as it is (dots, @, spaces, Cyrillic, emoji)', () => {
+    assert.equal(escapeClaudeProfileLabelForMarkdown('Sergei.Solo@work Работа 🚀'), 'Sergei.Solo@work Работа 🚀');
   });
 });
 

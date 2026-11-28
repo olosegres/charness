@@ -69,7 +69,11 @@ test('every round of the accounts\' states tells the operator and resumes the wa
   assert.match(botSource, /operatorAlertChannels = jiraConnector\?\.operatorChannel \? \[jiraConnector\.operatorChannel\] : \[\];/);
   const deliver = getFunctionBody('deliverClaudeAccountAlert');
   assert.match(deliver, /if \(ENV\.isTelegramServed\) posts\.push\(postClaudeAccountAlertToTelegram\(alert\)\);/);
-  assert.match(deliver, /runWithLocale\('en', \(\) => renderClaudeAccountAlert\(alert, getHostClaudeSignInHow\)\)/, 'a connector\'s channel reads English and the host\'s sign-in');
+  assert.match(
+    deliver,
+    /runWithLocale\('en', \(\) => renderClaudeAccountAlert\(alert, getHostClaudeSignInHow, \{ formatLabel: escapeClaudeProfileLabelForMarkdown \}\)\)/,
+    'a connector\'s channel reads English and the host\'s sign-in, and its Markdown shows the display names as written',
+  );
   const resume = getFunctionBody('resumeConversationsWaitingForAccount');
   assertOrder(resume, 'applyClaudeProfileToThread(key, { isAfterLimit: true })', 'resumeTopicOnNewSession(key,', 'moved onto an account that works before the continue prompt');
 });

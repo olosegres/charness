@@ -131,8 +131,9 @@ so one account's usage limit does not stop every topic.
   display name is free text up to 40 characters — capitals, dots, spaces, `@`, any language,
   emoji (`Sergei.Solo@work`, `Работа`) — and is what every screen and notice shows (`/accounts`,
   the `/limits` board, the `/limits_autoswitch` list, the switch and limit notices, the account
-  alerts and private sign-out messages, the sign-in messages, `/status`, a Jira issue's comment);
-  the bot log and an agent's context keep the id. ✏️ in `/accounts` changes it at any time. The id names the account's folder, its buttons, every
+  alerts and private sign-out messages, the sign-in messages, `/status`, a Jira issue's comment —
+  where it reads as written: its Markdown characters are escaped); the bot log and an agent's
+  context keep the id. ✏️ in `/accounts` changes it at any time. The id names the account's folder, its buttons, every
   topic's pick, the `/limits` list and what agents record, so it never changes: the bot
   derives it from the first name (`Sergei.Solo@work` → `sergei-solo-work`, `Работа` →
   `rabota`, a number added on a clash) and does not show it on the screens (`charness

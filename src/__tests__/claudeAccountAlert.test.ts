@@ -168,6 +168,16 @@ describe('renderClaudeAccountAlert (English)', () => {
       assert.deepEqual(hows, ['default'], 'the caller turns the id into its own hint (Telegram: the display name; the host: the folder)');
       assert.equal(runWithLocale('en', () => renderClaudeAccountSignOutDm('work')).text, '🔑 Claude account «Sergei.Solo@work» is signed out — its sign-in expired. Tap the button to sign it in again.');
       assert.equal(renderClaudeAccountSignOutDm('work').callbackData, 'acct_signin_work', 'the button keeps the id');
+      // A Markdown channel (the Jira operator issue) formats every name its own way; the sign-in hint is the caller's.
+      const forMarkdown = runWithLocale('en', () => renderClaudeAccountAlert(
+        { lost: [{ name: 'work', usability: 'signedOut', detail: null }], back: ['default'], instead: 'default' },
+        (name) => `\`${name}\``,
+        { formatLabel: (label) => `<${label}>` },
+      ));
+      assert.match(forMarkdown, /«<Sergei\.Solo@work>» is signed out/);
+      assert.match(forMarkdown, /continue on «<Main>»/);
+      assert.match(forMarkdown, /«<Main>» is signed in again/);
+      assert.match(forMarkdown, /sign it in again: `work`/);
     } finally {
       setClaudeProfileLabelReader(() => undefined);
     }
