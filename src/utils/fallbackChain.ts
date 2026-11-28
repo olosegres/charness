@@ -107,14 +107,15 @@ export function formatFallbackEntryKey(entry: FallbackChainEntry): string {
 }
 
 /**
- * @description The entry for a human: `Claude · work · fable`, `Claude · default · <topic's model>`,
- * `OpenCode · openai/gpt-5`. The backend words and the topic-model stand-in come localised from the caller.
+ * @description The entry for a human: `Claude · Work · fable`, `Claude · Main · <topic's model>`,
+ * `OpenCode · openai/gpt-5`. The backend words, the topic-model stand-in and what a Claude account is called (its display name,
+ * `utils/claudeProfileLabels.ts`; the id when absent — this module reads no locale) come from the caller.
  */
 export function formatFallbackEntryLabel(
   entry: FallbackChainEntry,
-  words: { claude: string; openCode: string; topicModel: string },
+  words: { claude: string; openCode: string; topicModel: string; profileLabel?: (name: string) => string },
 ): string {
-  if (entry.backend === 'claude') return `${words.claude} · ${entry.profile} · ${entry.model ?? words.topicModel}`;
+  if (entry.backend === 'claude') return `${words.claude} · ${words.profileLabel?.(entry.profile) ?? entry.profile} · ${entry.model ?? words.topicModel}`;
   return `${words.openCode} · ${buildOpenCodeModelLabel(entry)}`;
 }
 

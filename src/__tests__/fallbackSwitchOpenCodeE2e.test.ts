@@ -141,7 +141,8 @@ const openCodeModels = [defaultOpenCodeModel, chainOpenCodeModel, chainOpenCodeM
 /** The summary the CLI wrote when it compacted the Claude conversation, and a word of its body. */
 const compactionSummaryStart = 'This session is being continued from a previous conversation that ran out of context.';
 const compactionSummaryMarker = 'Primary Request and Intent';
-const exhaustedAccount = 'default';
+/** The account that hits the limit is `~/.claude` (id `default`): the screens and notices call it «Main» until it is renamed (the agent's bridge keeps the id). */
+const exhaustedAccountName = 'Main';
 const takeoverAccount = 'work';
 /** The first line of the question before a manual switch, and the line every such confirmation ends with. */
 const switchQuestionStart = '🔁 Switch this topic from';
@@ -366,7 +367,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     assert.equal(
       notice.text,
       // The task the move cut off: the operator hears it in the notice, the agent in its first prompt (below).
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on OpenCode ${chainOpenCodeModel}. The limit resets ${resetClock}. Switch: /limits\n${enDict['fallback.backgroundStopped']}`,
+      `🔁 Account «${exhaustedAccountName}» hit its usage limit — this topic continues on OpenCode ${chainOpenCodeModel}. The limit resets ${resetClock}. Switch: /limits\n${enDict['fallback.backgroundStopped']}`,
     );
     await getCharness().waitFor('the bridge to reach the OpenCode session', agentStartTimeoutMs, () => fakeOpenCode.prompts.length > 0);
 
@@ -405,7 +406,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     const askedAfter = getLatestMessageId(claudeTopic);
     fakeTelegram.pushOperatorMessage(claudeToOpenCode.threadId, '/claude');
     const question = await waitForSwitchQuestion(claudeTopic, askedAfter);
-    assertSwitchQuestion(claudeTopic, question, '🔁 Switch this topic from OpenCode to Claude «default»?');
+    assertSwitchQuestion(claudeTopic, question, '🔁 Switch this topic from OpenCode to Claude «Main»?');
 
     await claudeTopic.tapAndAwaitAnswer(question, cancelCallback);
     await claudeTopic.waitForMessageText('the question to turn into the cancel line', question, (text) => text === '✖️ Cancelled — this topic stays on OpenCode.');
@@ -420,7 +421,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
 
     await waitForSessionRespawn(getCharness(), getLayout(), 'the parked Claude conversation to resume under the first account', null, claudeSessionId, launchesBefore);
     await getCharness().waitFor('the backend to be Claude again in state.json', replyTimeoutMs, () => readAgent(claudeToOpenCode.threadId)?.name === claudeJsonStreamAdapterName);
-    await claudeTopic.waitForMessageText('the question to turn into the outcome line', secondQuestion, (text) => text === '🔁 Switched this topic to Claude «default».');
+    await claudeTopic.waitForMessageText('the question to turn into the outcome line', secondQuestion, (text) => text === '🔁 Switched this topic to Claude «Main».');
     assert.deepEqual(claudeTopic.getKeyboardData(secondQuestion), [], 'the keyboard is consumed');
     assert.equal(readAgent(claudeToOpenCode.threadId)?.claudeSessionId, claudeSessionId, 'the SAME conversation');
     assert.equal(readPersistedState(getLayout()).claudeProfileOverrides?.[getTopicKey(claudeToOpenCode.threadId)], undefined, 'a confirmed `/claude` names the account the topic follows but saves no pick of its own: the topic keeps following General');
@@ -590,7 +591,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     const launchesBefore = getSessionLaunches(getLayout()).length;
 
     const board = await openLimitsBoard(fakeTelegram, claudeTopic, claudeToOpenCode.threadId);
-    assert.match(board.rowLabel('Claude · default'), /^✓ Claude · default/, 'the topic runs Claude');
+    assert.match(board.rowLabel(`Claude · ${exhaustedAccountName}`), /^✓ Claude · Main/, 'the topic runs Claude');
     const askToSwitch = async (): Promise<FakeTelegramMessage> => {
       const askedAfter = getLatestMessageId(claudeTopic);
       await claudeTopic.tapAndAwaitAnswer(board.message, board.rowData('OpenCode · openai'));
@@ -651,7 +652,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     assert.match(picker.text, /^👤 This topic runs on: OpenCode openai\/gpt-5\n\n/, 'the title says where the topic really runs');
     const providerRows = claudeTopic.getKeyboardLabels(picker).filter((row) => row.length === 3 && row[2] === '🔌').map((row) => row[0]);
     assert.deepEqual(providerRows, ['anthropic', '✓ openai · gpt-5', 'google']);
-    assert.equal(claudeTopic.getKeyboardLabels(picker).flat().some((label) => label.startsWith('✓ default') || label.startsWith('✓ work')), false, 'no Claude account carries the ✓ while OpenCode runs');
+    assert.equal(claudeTopic.getKeyboardLabels(picker).flat().some((label) => label.startsWith('✓ Main') || label.startsWith('✓ work')), false, 'no Claude account carries the ✓ while OpenCode runs');
 
     const questionsBefore = claudeTopic.listMessages().filter(checkIsSwitchQuestion).length;
     const googleData = claudeTopic.getKeyboardData(picker).flat()[claudeTopic.getKeyboardLabels(picker).flat().indexOf('google')];
@@ -734,14 +735,14 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
   it('the General board: a Claude row sets the instance default and the ✓ follows; an OpenCode row only says a model is picked inside a topic and changes nothing', async () => {
     const board = await openLimitsBoard(fakeTelegram, general, generalTopicThreadId);
     assert.match(board.message.text, /Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — \/limits_autoswitch\n\nChoose the Claude account for all topics:$/);
-    assert.match(board.rowLabel('Claude · default'), /^✓ Claude · default/, 'the default account carries the ✓ in General');
+    assert.match(board.rowLabel(`Claude · ${exhaustedAccountName}`), /^✓ Claude · Main/, 'the default account carries the ✓ in General');
     assert.equal(readPersistedState(getLayout()).claudeProfileDefault, undefined, 'no default of its own yet');
 
     const setToast = await general.tapAndAwaitAnswer(board.message, board.rowData(`Claude · ${takeoverAccount}`));
     assert.match(setToast, new RegExp(`Claude account for all topics: ${takeoverAccount}`));
     await getCharness().waitFor('the default account in state.json', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfileDefault === takeoverAccount);
     await getCharness().waitFor('the ✓ to follow the tap', replyTimeoutMs, () => general.getKeyboardLabels(board.message).flat().some((label) => label.startsWith(`✓ Claude · ${takeoverAccount}`)));
-    assert.ok(!general.getKeyboardLabels(board.message).flat().some((label) => label.startsWith(`✓ Claude · ${exhaustedAccount}`)), 'the old default lost its ✓');
+    assert.ok(!general.getKeyboardLabels(board.message).flat().some((label) => label.startsWith(`✓ Claude · ${exhaustedAccountName}`)), 'the old default lost its ✓');
 
     const agentsBefore = JSON.stringify(readPersistedState(getLayout()).agents);
     const openCodeToast = await general.tapAndAwaitAnswer(board.message, board.rowData('OpenCode · openai'));
@@ -750,7 +751,7 @@ describe('The usage-limit switch to and from OpenCode end to end: built charness
     assert.equal(JSON.stringify(readPersistedState(getLayout()).agents), agentsBefore, 'no topic was touched');
 
     // Put the default back so the flow ends where it started.
-    await general.tapAndAwaitAnswer(board.message, board.rowData(`Claude · ${exhaustedAccount}`));
+    await general.tapAndAwaitAnswer(board.message, board.rowData(`Claude · ${exhaustedAccountName}`));
     await getCharness().waitFor('the default account back to the built-in one in state.json (stored as no value)', replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfileDefault === undefined);
   });
 

@@ -84,7 +84,8 @@ const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
 const projectFolder = 'lost-transcript';
 const silentFolder = 'never-spoken';
 const silentTopicThreadId = 112;
-const firstAccount = 'default';
+/** The first account is `~/.claude` (id `default`): the screens call it «Main» until it is renamed. */
+const firstAccountName = 'Main';
 const secondAccount = 'work';
 
 const replyTimeoutMs = 20 * 1000;
@@ -231,7 +232,7 @@ describe('A conversation whose transcript was removed, end to end: built charnes
   it('with the transcript removed under the live agent, a General tap on the second account whose toast comes too late still moves the board\'s ✓, says the confirmation as a message, and starts the conversation again under its id', async () => {
     fs.rmSync(getTranscriptPath());
     const board = await openLimitsBoard(fakeTelegram, general, generalTopicThreadId);
-    assert.match(board.rowLabel(`Claude · ${firstAccount}`), /^✓ Claude · default/, 'precondition: the default account is the first');
+    assert.match(board.rowLabel(`Claude · ${firstAccountName}`), /^✓ Claude · Main/, 'precondition: the default account (~/.claude, «Main») is the first');
     const launchesBefore = getSessionLaunches(getLayout()).length;
     fakeTelegram.isCallbackAnswerExpired = true;
     try {
@@ -258,7 +259,7 @@ describe('A conversation whose transcript was removed, end to end: built charnes
     await getCharness().waitFor('the first process to be gone', exitFlushDelayMs * 4, () => !checkIsPidAlive(firstProcessPid));
     const board = await openLimitsBoard(fakeTelegram, general, generalTopicThreadId);
     const launchesBefore = getSessionLaunches(getLayout()).length;
-    await general.tapAndAwaitAnswer(board.message, board.rowData(`Claude · ${firstAccount}`));
+    await general.tapAndAwaitAnswer(board.message, board.rowData(`Claude · ${firstAccountName}`));
     await waitForSessionRespawn(getCharness(), getLayout(), 'the topic\'s agent to be re-spawned under the first account', null, sessionId, launchesBefore);
     assert.deepEqual(listTopicErrors(), [], 'the topic hears no error');
     assert.ok(!getCharness().output.includes('exited unexpectedly'), 'the agent did not die at its start');

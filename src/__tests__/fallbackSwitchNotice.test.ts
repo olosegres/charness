@@ -16,7 +16,7 @@
 
 /** Test case: N/A — Charness has no Jira tracker. */
 
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { localeCodes, runWithLocale, type Locale } from '../i18n';
 import {
@@ -24,6 +24,7 @@ import {
   buildFallbackSwitchedNotice,
 } from '../utils/fallbackSwitchNotice';
 import { getFallbackModelToPin, type FallbackChainEntry } from '../utils/fallbackChain';
+import { setClaudeProfileLabelReader } from '../utils/claudeProfileLabels';
 
 const claude = (profile: string, model: string | null = null): Extract<FallbackChainEntry, { backend: 'claude' }> => ({ backend: 'claude', profile, model });
 const openCode = (providerId: string, modelId: string): FallbackChainEntry => ({ backend: 'opencode', providerId, modelId });
@@ -35,36 +36,36 @@ const runningOpus = 'claude-opus-5-5[1m]';
 describe('buildFallbackSwitchedNotice (English)', () => {
   it('Claude → Claude: the account that hit the limit, the account the topic continues on, the reset and /limits', () => {
     assert.equal(
-      buildFallbackSwitchedNotice({ from: claude('default', runningOpus), to: claude('work', 'opus'), resetTime, runningModel: runningOpus }),
-      '🔁 Account «default» hit its usage limit — this topic continues on «work». The limit resets 2026-10-18 01:00. Switch: /limits',
+      buildFallbackSwitchedNotice({ from: claude('personal', runningOpus), to: claude('work', 'opus'), resetTime, runningModel: runningOpus }),
+      '🔁 Account «personal» hit its usage limit — this topic continues on «work». The limit resets 2026-10-18 01:00. Switch: /limits',
     );
   });
 
   it('names the model only when the switch changes it: `opus` against the running `claude-opus-5-5[1m]` is not a change', () => {
-    const from = claude('default', runningOpus);
+    const from = claude('personal', runningOpus);
     const sameModel = buildFallbackSwitchedNotice({ from, to: claude('work', 'opus'), resetTime, runningModel: runningOpus });
     assert.ok(!sameModel.includes('(opus)'), sameModel);
     const otherModel = buildFallbackSwitchedNotice({ from, to: claude('work', 'sonnet'), resetTime, runningModel: runningOpus });
     assert.equal(
       otherModel,
-      '🔁 Account «default» hit its usage limit — this topic continues on «work» (sonnet). The limit resets 2026-10-18 01:00. Switch: /limits',
+      '🔁 Account «personal» hit its usage limit — this topic continues on «work» (sonnet). The limit resets 2026-10-18 01:00. Switch: /limits',
     );
   });
 
   it('another model of the SAME account (the limit covered the model it ran, not the one picked): the model hit the limit, the account is named once', () => {
     assert.equal(
-      buildFallbackSwitchedNotice({ from: claude('default', 'claude-fable-5-1'), to: claude('default', 'sonnet'), resetTime, runningModel: 'claude-fable-5-1' }),
-      '🔁 Model claude-fable-5-1 hit its usage limit — this topic continues on «default» (sonnet). The limit resets 2026-10-18 01:00. Switch: /limits',
+      buildFallbackSwitchedNotice({ from: claude('personal', 'claude-fable-5-1'), to: claude('personal', 'sonnet'), resetTime, runningModel: 'claude-fable-5-1' }),
+      '🔁 Model claude-fable-5-1 hit its usage limit — this topic continues on «personal» (sonnet). The limit resets 2026-10-18 01:00. Switch: /limits',
     );
     assert.equal(
-      buildFallbackSwitchedNotice({ from: claude('default', null), to: claude('default', 'sonnet'), resetTime: null, runningModel: null }),
-      '🔁 Account «default» hit its usage limit — this topic continues on «default» (sonnet). Switch: /limits',
+      buildFallbackSwitchedNotice({ from: claude('personal', null), to: claude('personal', 'sonnet'), resetTime: null, runningModel: null }),
+      '🔁 Account «personal» hit its usage limit — this topic continues on «personal» (sonnet). Switch: /limits',
       'with no running model to name, the account wording stands',
     );
   });
 
   it('a rung that keeps the topic\'s model, or a session whose model is unknown, never invents one', () => {
-    const from = claude('default');
+    const from = claude('personal');
     assert.ok(!buildFallbackSwitchedNotice({ from, to: claude('work'), resetTime, runningModel: runningOpus }).includes('('));
     // Unknown running model: the rung's pin WILL be applied (nothing says the session already runs it), so it is named.
     assert.ok(buildFallbackSwitchedNotice({ from, to: claude('work', 'sonnet'), resetTime, runningModel: null }).includes('«work» (sonnet)'));
@@ -72,15 +73,15 @@ describe('buildFallbackSwitchedNotice (English)', () => {
 
   it('reset unknown: the reset clause is dropped, the switch-back command stays', () => {
     assert.equal(
-      buildFallbackSwitchedNotice({ from: claude('default'), to: claude('work'), resetTime: null, runningModel: runningOpus }),
-      '🔁 Account «default» hit its usage limit — this topic continues on «work». Switch: /limits',
+      buildFallbackSwitchedNotice({ from: claude('personal'), to: claude('work'), resetTime: null, runningModel: runningOpus }),
+      '🔁 Account «personal» hit its usage limit — this topic continues on «work». Switch: /limits',
     );
   });
 
   it('Claude → OpenCode: the target says OpenCode and its model', () => {
     assert.equal(
-      buildFallbackSwitchedNotice({ from: claude('default'), to: openCode('openai', 'gpt-5'), resetTime, runningModel: runningOpus }),
-      '🔁 Account «default» hit its usage limit — this topic continues on OpenCode openai/gpt-5. The limit resets 2026-10-18 01:00. Switch: /limits',
+      buildFallbackSwitchedNotice({ from: claude('personal'), to: openCode('openai', 'gpt-5'), resetTime, runningModel: runningOpus }),
+      '🔁 Account «personal» hit its usage limit — this topic continues on OpenCode openai/gpt-5. The limit resets 2026-10-18 01:00. Switch: /limits',
     );
   });
 
@@ -109,15 +110,15 @@ describe('buildFallbackSwitchedNotice (English)', () => {
 describe('buildFallbackDeferredNotice (English)', () => {
   it('the move waits for the end of the current answer; no reset, no model, no command', () => {
     assert.equal(
-      buildFallbackDeferredNotice(claude('default', runningOpus), claude('work', 'sonnet')),
-      '🔁 Account «default» hit its usage limit — this topic moves to «work» when the current answer ends.',
+      buildFallbackDeferredNotice(claude('personal', runningOpus), claude('work', 'sonnet')),
+      '🔁 Account «personal» hit its usage limit — this topic moves to «work» when the current answer ends.',
     );
   });
 
   it('a move off an account the CLI refused says so, not a limit', () => {
     assert.equal(
-      buildFallbackDeferredNotice(claude('default'), claude('work'), 'signIn'),
-      '🔁 Account «default» is signed out or its sign-in was refused — this topic moves to «work» when the current answer ends.',
+      buildFallbackDeferredNotice(claude('personal'), claude('work'), 'signIn'),
+      '🔁 Account «personal» is signed out or its sign-in was refused — this topic moves to «work» when the current answer ends.',
     );
   });
 });
@@ -125,8 +126,28 @@ describe('buildFallbackDeferredNotice (English)', () => {
 describe('a move off an account the CLI refused (English)', () => {
   it('names the refused account and the one the topic continues on, no limit and no reset — a sign-in has none', () => {
     assert.equal(
-      buildFallbackSwitchedNotice({ from: claude('default', runningOpus), to: claude('work'), resetTime, runningModel: runningOpus, reason: 'signIn' }),
-      '🔁 Account «default» is signed out or its sign-in was refused — this topic continues on «work». Switch: /limits',
+      buildFallbackSwitchedNotice({ from: claude('personal', runningOpus), to: claude('work'), resetTime, runningModel: runningOpus, reason: 'signIn' }),
+      '🔁 Account «personal» is signed out or its sign-in was refused — this topic continues on «work». Switch: /limits',
+    );
+  });
+});
+
+describe('the accounts are named by what the operator calls them (utils/claudeProfileLabels.ts)', () => {
+  afterEach(() => setClaudeProfileLabelReader(() => undefined));
+
+  it('a renamed account by its display name, ~/.claude as «Main» in the reader\'s language — never by the id', () => {
+    setClaudeProfileLabelReader((name) => (name === 'work' ? 'Sergei.Solo@work' : undefined));
+    assert.equal(
+      buildFallbackSwitchedNotice({ from: claude('default'), to: claude('work'), resetTime: null, runningModel: null }),
+      '🔁 Account «Main» hit its usage limit — this topic continues on «Sergei.Solo@work». Switch: /limits',
+    );
+    assert.equal(
+      runWithLocale('ru', () => buildFallbackDeferredNotice(claude('work'), claude('default'), 'signIn')).match(/«[^»]+»/g)?.join(' '),
+      '«Sergei.Solo@work» «Основной»',
+    );
+    assert.equal(
+      buildFallbackSwitchedNotice({ from: openCode('openai', 'gpt-5'), to: claude('work'), resetTime: null, runningModel: null }),
+      '🔁 Model openai/gpt-5 hit its usage limit — this topic continues on Claude «Sergei.Solo@work». Switch: /limits',
     );
   });
 });
@@ -152,14 +173,14 @@ type SwitchedNoticeInput = Parameters<typeof buildFallbackSwitchedNotice>[0];
 
 /** Every case once, with the names each must write exactly once. */
 const noticeCases: Array<{ name: string; input: SwitchedNoticeInput; names: string[] }> = [
-  { name: 'claude → claude, reset', input: { from: claude('default'), to: claude('work', 'sonnet'), resetTime, runningModel: runningOpus }, names: ['«default»', '«work»', 'sonnet'] },
-  { name: 'claude → claude, no reset', input: { from: claude('default'), to: claude('work', 'sonnet'), resetTime: null, runningModel: runningOpus }, names: ['«default»', '«work»', 'sonnet'] },
-  { name: 'claude → opencode', input: { from: claude('default'), to: openCode('openai', 'gpt-5'), resetTime, runningModel: runningOpus }, names: ['«default»', 'OpenCode openai/gpt-5'] },
+  { name: 'claude → claude, reset', input: { from: claude('personal'), to: claude('work', 'sonnet'), resetTime, runningModel: runningOpus }, names: ['«personal»', '«work»', 'sonnet'] },
+  { name: 'claude → claude, no reset', input: { from: claude('personal'), to: claude('work', 'sonnet'), resetTime: null, runningModel: runningOpus }, names: ['«personal»', '«work»', 'sonnet'] },
+  { name: 'claude → opencode', input: { from: claude('personal'), to: openCode('openai', 'gpt-5'), resetTime, runningModel: runningOpus }, names: ['«personal»', 'OpenCode openai/gpt-5'] },
   { name: 'opencode → opencode', input: { from: openCode('openai', 'gpt-5'), to: openCode('google', 'gemini-2.5-pro'), resetTime: null, runningModel: null }, names: ['openai/gpt-5', 'OpenCode google/gemini-2.5-pro'] },
   { name: 'opencode → claude', input: { from: openCode('openai', 'gpt-5'), to: claude('work', 'opus'), resetTime, runningModel: null }, names: ['openai/gpt-5', 'Claude «work»', 'opus'] },
-  { name: 'same account, another model', input: { from: claude('default', 'claude-fable-5-1'), to: claude('default', 'sonnet'), resetTime, runningModel: 'claude-fable-5-1' }, names: ['claude-fable-5-1', '«default»'] },
+  { name: 'same account, another model', input: { from: claude('personal', 'claude-fable-5-1'), to: claude('personal', 'sonnet'), resetTime, runningModel: 'claude-fable-5-1' }, names: ['claude-fable-5-1', '«personal»'] },
   { name: 'unknown source', input: { from: null, to: claude('work'), resetTime: null, runningModel: null }, names: ['Claude «work»'] },
-  { name: 'refused sign-in', input: { from: claude('default'), to: claude('work'), resetTime: null, runningModel: runningOpus, reason: 'signIn' }, names: ['«default»', '«work»'] },
+  { name: 'refused sign-in', input: { from: claude('personal'), to: claude('work'), resetTime: null, runningModel: runningOpus, reason: 'signIn' }, names: ['«personal»', '«work»'] },
 ];
 
 const countOccurrences = (text: string, part: string): number => text.split(part).length - 1;
@@ -184,16 +205,16 @@ for (const locale of localeCodes) {
 
     it('the deferred notice names both accounts once and promises no model, reset or command', () => {
       for (const reason of ['limit', 'signIn'] as const) {
-        const text = run(() => buildFallbackDeferredNotice(claude('default'), claude('work', 'sonnet'), reason));
-        assert.equal(countOccurrences(text, '«default»'), 1, text);
+        const text = run(() => buildFallbackDeferredNotice(claude('personal'), claude('work', 'sonnet'), reason));
+        assert.equal(countOccurrences(text, '«personal»'), 1, text);
         assert.equal(countOccurrences(text, '«work»'), 1, text);
         assert.ok(!text.includes('sonnet') && !text.includes('/limits') && !/\{\w+\}/.test(text), text);
       }
     });
 
     it('a move off a refused account reads apart from a limit move', () => {
-      const signIn = run(() => buildFallbackSwitchedNotice({ from: claude('default'), to: claude('work'), resetTime: null, runningModel: null, reason: 'signIn' }));
-      const limit = run(() => buildFallbackSwitchedNotice({ from: claude('default'), to: claude('work'), resetTime: null, runningModel: null }));
+      const signIn = run(() => buildFallbackSwitchedNotice({ from: claude('personal'), to: claude('work'), resetTime: null, runningModel: null, reason: 'signIn' }));
+      const limit = run(() => buildFallbackSwitchedNotice({ from: claude('personal'), to: claude('work'), resetTime: null, runningModel: null }));
       assert.notEqual(signIn, limit);
     });
   });

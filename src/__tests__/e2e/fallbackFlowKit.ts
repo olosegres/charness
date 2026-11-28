@@ -206,7 +206,7 @@ export async function waitForSessionRespawn(
 /** The `/limits` board a topic shows, found by the callback data of its rows (`lim_*`). */
 export interface OpenedLimitsBoard {
   message: FakeTelegramMessage;
-  /** The callback data of the row whose label (without its ✓) starts with `rowName` (`Claude · default`, `OpenCode · openai`). */
+  /** The callback data of the row whose label (without its ✓) starts with `rowName` (`Claude · Main` — an account by its display name —, `OpenCode · openai`). */
   rowData: (rowName: string) => string;
   /** The label of that row. */
   rowLabel: (rowName: string) => string;

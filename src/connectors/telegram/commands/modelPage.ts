@@ -92,6 +92,8 @@ export interface ProviderModelPageInput {
   /** The localised program name (`Claude` / `OpenCode`). */
   program: string;
   providerId: string;
+  /** What the heading calls the provider when it is not its id: a Claude account's display name (`utils/claudeProfileLabels.ts`). */
+  providerName?: string;
   models: readonly string[];
   page: number;
   /** The model id that carries the ✓. */
@@ -110,7 +112,7 @@ export function buildProviderModelPage(input: ProviderModelPageInput): ProviderM
     callbacks: input.callbacks,
     getSuffix: input.getSuffix,
   });
-  return { text: t('limits.pickModel', { label: `${input.program} · ${input.providerId}` }), keyboard: Markup.inlineKeyboard(rows) };
+  return { text: t('limits.pickModel', { label: `${input.program} · ${input.providerName ?? input.providerId}` }), keyboard: Markup.inlineKeyboard(rows) };
 }
 
 export interface OpenCodeProviderPageInput {

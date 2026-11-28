@@ -32,6 +32,7 @@ import type { SessionKey } from '../sessionKey';
 import { getFallbackChainRevision, type FallbackChainEntry, type FallbackDetection } from '../utils/fallbackChain';
 import type { ClaudeProfileUsageView } from '../utils/claudeUsage';
 import { createCommandHarness, type CommandHarness } from './commandModuleHarness';
+import { setClaudeProfileLabelReader } from '../utils/claudeProfileLabels';
 
 let harness: CommandHarness;
 let isGeneralTopic = true;
@@ -151,7 +152,7 @@ describe('fallbackChain: /limits over its ports', () => {
     const rows = harness.getKeyboardData(rerender);
     const labels = harness.getKeyboardLabels(rerender);
     assert.deepEqual(rows.slice(0, 5), [0, 1, 2, 3, 4].map((i) => [`fbk_op_${i}_${revision}`]), 'one full-width button per rung');
-    assert.equal(labels[0][0], '1. Claude · default');
+    assert.equal(labels[0][0], '1. Claude · Main');
     assert.equal(labels[2][0], '3. OpenCode · openai · gpt-5-mini');
     assert.match(labels[4][0], /^5\. OpenCode · google · gemini-2\.5-pro ⛔ /);
     assert.deepEqual(rows.at(-3), ['fbk_add', 'fbk_prop', 'fbk_clear']);
@@ -165,7 +166,7 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.tapButton(pickerId, `fbk_op_0_${revision}`);
     let detail = harness.edits.at(-1)!;
     assert.equal(detail.messageId, pickerId);
-    assert.equal(detail.text, "🪜 1 of 5: Claude · default · topic's model\n✅ Ready.");
+    assert.equal(detail.text, "🪜 1 of 5: Claude · Main · topic's model\n✅ Ready.");
     assert.deepEqual(harness.getKeyboardData(detail), [
       [`fbk_dn_0_${revision}`], [`fbk_tg_0_${revision}`, `fbk_rm_0_${revision}`], ['fbk_back'],
     ], 'the first rung has no «up»');
@@ -174,7 +175,7 @@ describe('fallbackChain: /limits over its ports', () => {
     await harness.tapButton(pickerId, `fbk_dn_0_${revision}`);
     assert.deepEqual(harness.state.getFallbackChain().slice(0, 2), [claude('work'), claude('default')]);
     detail = harness.edits.at(-1)!;
-    assert.match(detail.text ?? '', /^🪜 2 of 5: Claude · default/, 'the view follows the rung to its new place');
+    assert.match(detail.text ?? '', /^🪜 2 of 5: Claude · Main/, 'the view follows the rung to its new place');
     const fresh = getFallbackChainRevision(harness.state.getFallbackChain());
     assert.deepEqual(harness.getKeyboardData(detail)[0], [`fbk_up_1_${fresh}`, `fbk_dn_1_${fresh}`]);
 
@@ -220,6 +221,31 @@ describe('fallbackChain: /limits over its ports', () => {
       assert.equal(harness.replies.length, repliesBefore, 'a toast that fits needs no message');
     } finally {
       await harness.state.setFallbackChain(savedChain);
+    }
+  });
+
+  it('an account is named by what the operator calls it — on its rung, in «add» and on the model step — while every button keeps its id', async () => {
+    setClaudeProfileLabelReader((name) => (name === 'work' ? 'Sergei.Solo@work' : undefined));
+    const savedDetection = detection;
+    detection = { ...savedDetection, claudeProfiles: savedDetection.claudeProfiles.map((view) => (view.name === 'work' ? { ...view, label: 'Sergei.Solo@work' } : view)) };
+    try {
+      const pickerId = harness.replies.at(-1)!.messageId!;
+      await harness.tapButton(pickerId, 'fbk_back');
+      const list = harness.edits.at(-1);
+      const workIndex = harness.state.getFallbackChain().findIndex((entry) => entry.backend === 'claude' && entry.profile === 'work' && entry.model === null);
+      assert.ok(workIndex >= 0, 'precondition: the drafted chain holds «work»');
+      assert.equal(harness.getKeyboardLabels(list)[workIndex][0], `${workIndex + 1}. Claude · Sergei.Solo@work`);
+      await harness.tapButton(pickerId, `fbk_op_${workIndex}_${getFallbackChainRevision(harness.state.getFallbackChain())}`);
+      assert.match(harness.edits.at(-1)?.text ?? '', new RegExp(`^🪜 ${workIndex + 1} of \\d+: Claude · Sergei\\.Solo@work · topic's model\\n`));
+      await harness.tapButton(pickerId, 'fbk_add');
+      assert.deepEqual(harness.getKeyboardLabels(harness.edits.at(-1)).slice(0, 2), [['Claude · Main'], ['Claude · Sergei.Solo@work']]);
+      assert.deepEqual(harness.getKeyboardData(harness.edits.at(-1)).slice(0, 2), [['fbk_addc_default'], ['fbk_addc_work']]);
+      await harness.tapButton(pickerId, 'fbk_addc_work');
+      assert.equal(harness.edits.at(-1)?.text, '➕ Claude · Sergei.Solo@work — pick a model:');
+      await harness.tapButton(pickerId, 'fbk_back');
+    } finally {
+      detection = savedDetection;
+      setClaudeProfileLabelReader(() => undefined);
     }
   });
 

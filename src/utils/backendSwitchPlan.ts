@@ -11,6 +11,7 @@
 
 import { t } from '../i18n';
 import { checkIsClaudeBackend, openCodeAdapterName } from '../adapters/adapterNames';
+import { getClaudeProfileLabel } from './claudeProfileLabels';
 
 /** The two agent families a topic can hand a conversation between. */
 export type BackendFamily = 'claude' | 'opencode';
@@ -64,10 +65,13 @@ export function formatBackendFamily(family: BackendFamily): string {
   return family === 'claude' ? t('fallback.backendClaude') : t('fallback.backendOpenCode');
 }
 
-/** The target as the question names it: `Claude «work»`, `Claude «work» (sonnet)`, `OpenCode openai/gpt-5`, or `OpenCode` when its model is unknown. */
+/**
+ * The target as the question names it: `Claude «Work»` (the account's display name), `Claude «Work» (sonnet)`, `OpenCode openai/gpt-5`, or
+ * `OpenCode` when its model is unknown.
+ */
 export function formatBackendSwitchTarget(target: BackendSwitchTarget): string {
   if (target.backend === 'claude') {
-    const account = `${t('fallback.backendClaude')} «${target.profile}»`;
+    const account = `${t('fallback.backendClaude')} «${getClaudeProfileLabel(target.profile)}»`;
     return target.model === null ? account : `${account} (${target.model})`;
   }
   return target.modelLabel === null ? t('fallback.backendOpenCode') : `${t('fallback.backendOpenCode')} ${target.modelLabel}`;

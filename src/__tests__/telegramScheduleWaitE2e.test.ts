@@ -753,7 +753,7 @@ describe('A request waits for its schedule in a Telegram topic end to end: built
       const silentRequestId = readFakeLog<FakeClaudeTurn>(fakeClaudeLogFileNames.turns).find((turn) => turn.issueKey === 'XA-31')?.requestId ?? '';
       assert.match(silentRequestId, /^req_/);
       // The process works: the pick waits for the turn's end.
-      await topic.sendAndAwaitReply('/accounts use default', 'Claude account for this topic: default');
+      await topic.sendAndAwaitReply('/accounts use default', 'Claude account for this topic: Main');
       const launchesBefore = getSessionLaunches(getLayout()).length;
       const respawnsBefore = countOutputLines(respawnLine);
       // The turn ends with no answer; the per-turn stop follows at once and holds its window open while the process exits.

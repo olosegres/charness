@@ -292,6 +292,20 @@ test('an account whose email was never probed is named alone', () => {
   assert.match(report, /^Account: default$/m);
 });
 
+test('an account is named by its display name (`label`) when the bot gives one, on the pending row too and in the spend line of an API account', () => {
+  const report = renderReport('en', {
+    account: buildClaudeAccount({
+      current: { name: 'default', label: 'Main', email: 'me@example.com', loggedIn: true, limitedUntil: null },
+      pending: { name: 'work', label: 'Sergei.Solo@work', email: 'you@example.com', loggedIn: true, limitedUntil: null },
+    }),
+  });
+  assert.match(report, /^Account: Main · me@example\.com\nSwitch pending: Sergei\.Solo@work · you@example\.com — applies when/m);
+  const api = renderReport('en', {
+    account: buildClaudeAccount({ current: { name: 'console', label: 'Console (team)', email: null, loggedIn: true, limitedUntil: null, billing: 'api', apiSpend: { totalUsd: 1.5, since: '2026-10-14T08:00:00Z', lastTurnUsd: 0.5, lastTurnAt: '2026-10-14T09:00:00Z' } } }),
+  });
+  assert.match(api, /^💳 API spend on Console \(team\): /m);
+});
+
 test('a stopped Claude topic still names the profile its next start uses', () => {
   const report = renderReport('en', { isActive: false, account: buildClaudeAccount() });
   assert.match(report, /Session: stopped/);

@@ -8,6 +8,9 @@
  * by the status check. One flow, in order:
  *
  *   boot with an account `work` signed in → `/limits` lists it as an ordinary row; a topic is bound, its agent started and moved onto `work`
+ *   → the operator renames it with ✏️ in `/accounts` to a display name with a capital, a dot, an `@`, spaces and brackets: the screen shows
+ *     it at once, the id (folder, buttons, the topic's pick) stays `work`, and every message below — the alerts, `/limits`, the private
+ *     message, the sign-in relay — names the account by that display name
  *   → EPISODE 1: the operator's next message ends the turn on «Failed to authenticate: this login reached its time limit and cannot be
  *     renewed» (a refusal of the login, `signedOut`): the conversation moves to `default` by itself and General gets ONE pinned alert naming
  *     the account with the CLI's words; the operator has NEVER opened a private chat with the bot, so Telegram refuses the private message —
@@ -65,8 +68,10 @@ const operator: TelegramUser = { id: 424242, is_bot: false, first_name: 'Operato
 const botUser: TelegramUser = { id: 7000000001, is_bot: true, first_name: 'Fake bot', username: 'fake_charness_bot' };
 /** Not a Telegram token: the fake Bot API accepts any `/bot<token>/` path, and the real host is never contacted. */
 const fakeBotToken = '1000000001:fake-token-for-the-loopback-bot-api';
-/** The account whose sign-in expires. */
+/** The account whose sign-in expires: its fixed id (folder, buttons, state)… */
 const account = 'work';
+/** …and the display name the operator gives it with ✏️, which every message names it by (short enough for a button: never cut). */
+const accountName = 'Sergei.Solo@team (Work)';
 const pastedCode = 'fake-claude-code-4711';
 const signInCallback = `acct_signin_${account}`;
 /** The topic whose conversation runs on the account, and its folder (the instance layout makes it). */
@@ -114,7 +119,7 @@ function writeLogin(method: 'claudeai' | typeof fakeClaudeExpiredLoginMethod): v
 
 /** The bot's account alerts in General: the ones that name the account as signed out. */
 function listGeneralAlerts(): FakeTelegramMessage[] {
-  return general.listMessages().filter((message) => message.text.includes(`Claude account «${account}» is signed out`));
+  return general.listMessages().filter((message) => message.text.includes(`Claude account «${accountName}» is signed out`));
 }
 
 /** The sends the bot attempted to the operator's private chat so far (the boot's «ready» status was one: refused as well while no chat is open). */
@@ -124,7 +129,7 @@ function countPrivateSendAttempts(): number {
 
 /** What the bot told the operator about the account in their PRIVATE chat. */
 function listPrivateSignOutMessages(): FakeTelegramMessage[] {
-  return privateChat.listMessages().filter((message) => message.text.includes(`«${account}»`));
+  return privateChat.listMessages().filter((message) => message.text.includes(`«${accountName}»`));
 }
 
 /** The operator's `/accounts` in General: the forced probe of every account runs before the screen is drawn. */
@@ -137,10 +142,10 @@ async function readLimitsOfAccount(): Promise<{ line: string | undefined; row: {
   const board = await openLimitsBoard(fakeTelegram, general, generalTopicThreadId);
   const labels = general.getKeyboardLabels(board.message).flat();
   const data = general.getKeyboardData(board.message).flat();
-  const index = labels.findIndex((label) => label.includes(` · ${account}`));
+  const index = labels.findIndex((label) => label.includes(` · ${accountName}`));
   return {
     message: board.message,
-    line: board.message.text.split('\n').find((candidate) => candidate.startsWith(`${account} —`)),
+    line: board.message.text.split('\n').find((candidate) => candidate.startsWith(`${accountName} —`)),
     row: index < 0 ? undefined : { label: labels[index], data: data[index] },
   };
 }
@@ -195,9 +200,9 @@ describe('A Claude account whose sign-in expires, end to end: built charness, fa
   it('boots with the account signed in: `/limits` lists it as an ordinary row, no alert anywhere; a topic is bound, its agent started and moved onto the account', async () => {
     charness = await startCharnessOnInstance(getLayout(), fakeTelegram);
     await getCharness().waitFor(`${account} adopted and signed in`, replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.[account]?.loggedIn === true);
-    const limits = await readLimitsOfAccount();
-    assert.equal(limits.row?.label, `Claude · ${account}`);
-    assert.match(limits.row?.data ?? '', /^lim_c_\d+$/, 'a switch row');
+    const board = await openLimitsBoard(fakeTelegram, general, generalTopicThreadId);
+    assert.equal(board.rowLabel(`Claude · ${account}`), `Claude · ${account}`, 'an account adopted from a folder shows its id until it is renamed');
+    assert.match(board.rowData(`Claude · ${account}`), /^lim_c_\d+$/, 'a switch row');
     assert.equal(listGeneralAlerts().length, 0);
     assert.equal(fakeTelegram.listPrivateBotMessages(operator.id).length, 0);
 
@@ -212,23 +217,40 @@ describe('A Claude account whose sign-in expires, end to end: built charness, fa
     await waitForSessionRespawn(getCharness(), getLayout(), `the conversation under ${account}`, getAccountConfigDir(getLayout(), account), sessionId, launchesBefore);
   });
 
+  it('✏️ renames the account: the screen shows the new name at once, the id stays, and /limits names it so', async () => {
+    const screen = await probeAccounts();
+    assert.ok(general.getKeyboardData(screen).some((row) => row.includes(`acct_ren_${account}`)), 'every account row has ✏️');
+    await general.tapAndAwaitAnswer(screen, `acct_ren_${account}`);
+    await general.waitForMessage('the rename question', (message) => message.text.startsWith(`✏️ New name for «${account}»`));
+    fakeTelegram.pushOperatorMessage(generalTopicThreadId, `  ${accountName}  `);
+    await general.waitForMessage('the rename confirmation', (message) => message.text === `✅ «${account}» is now called «${accountName}».`);
+    await general.waitForMessageText('the screen re-rendered with the new name', screen, (text) => text.includes(`• ${accountName} — `));
+    const persisted = readPersistedState(getLayout());
+    assert.equal(persisted.claudeProfiles?.[account]?.label, accountName, 'stored under the fixed id');
+    assert.equal(persisted.claudeProfileOverrides?.[`${group.id}:${topicThreadId}`], account, 'the topic\'s pick still names the id');
+    assert.ok(fs.existsSync(getAccountConfigDir(getLayout(), account)), 'the folder keeps its name');
+    const limits = await readLimitsOfAccount();
+    assert.equal(limits.row?.label, `Claude · ${accountName}`, '/limits names it by its display name');
+    assert.match(limits.row?.data ?? '', /^lim_c_\d+$/);
+  });
+
   it('EPISODE 1, a refused turn: the conversation moves to `default`; General gets ONE pinned alert with the CLI\'s words; the operator never opened a private chat, so the private message is refused, nothing lands in any private chat and the alert asks them to open one', async () => {
     const privateAttemptsBefore = countPrivateSendAttempts();
     const launchesBefore = getSessionLaunches(getLayout()).length;
     fs.writeFileSync(path.join(getLayout().fakeStateDir, fakeClaudeApiErrorOnceFileName), refusalText);
     fakeTelegram.pushOperatorMessage(topicThreadId, 'please carry on');
 
-    const alert = await general.waitForMessage('the alert in General', (message) => message.text.includes(`Claude account «${account}» is signed out`));
-    assert.match(alert.text, new RegExp(`/accounts login ${account}`), 'General keeps its text as before: the command to run');
+    const alert = await general.waitForMessage('the alert in General', (message) => message.text.includes(`Claude account «${accountName}» is signed out`));
+    assert.ok(alert.text.includes(`/accounts login ${accountName}`), `General keeps its text as before: the command to run, by the account's name: ${alert.text}`);
     assert.ok(alert.text.includes(`The CLI said: ${refusalText}`), `the CLI's own words: ${alert.text}`);
-    assert.ok(alert.text.includes('Its conversations continue on «default»'), alert.text);
+    assert.ok(alert.text.includes('Its conversations continue on «Main»'), alert.text);
     assert.ok(alert.text.endsWith(openPrivateChatLine), `the line that asks the operator to open a private chat closes the alert: ${alert.text}`);
     assert.ok(alert.text.includes('To be told about this in a private message next time, open a private chat with @fake_charness_bot'), alert.text);
     await getCharness().waitFor('the alert pinned in General', replyTimeoutMs, () => fakeTelegram.listPinnedMessageIds().includes(alert.message_id));
     await waitForSessionRespawn(getCharness(), getLayout(), 'the conversation moved to default', null, sessionId, launchesBefore);
 
     const screen = await probeAccounts();
-    assert.match(screen.text, new RegExp(`• ${account} — not signed in`), '/accounts says «not signed in»');
+    assert.ok(screen.text.includes(`• ${accountName} — not signed in`), `/accounts says «not signed in»: ${screen.text}`);
     await getCharness().waitFor('the private message tried and refused', replyTimeoutMs, () => getCharness().output.includes("[accounts] the operator's private chat is closed to the bot"));
     await new Promise((resolve) => setTimeout(resolve, settleMs));
     assert.equal(fakeTelegram.listPrivateBotMessages(operator.id).length, 0, 'nothing in the operator\'s private chat: it does not exist for the bot');
@@ -242,8 +264,8 @@ describe('A Claude account whose sign-in expires, end to end: built charness, fa
 
   it('THE BUG: `/limits` does not drop the signed-out account — its usage line says `🔑 sign-in expired` and its row is the sign-in button, no switch target', async () => {
     const limits = await readLimitsOfAccount();
-    assert.equal(limits.line, `${account} — 🔑 sign-in expired`);
-    assert.equal(limits.row?.label, `🔑 Claude · ${account}`);
+    assert.equal(limits.line, `${accountName} — 🔑 sign-in expired`);
+    assert.equal(limits.row?.label, `🔑 Claude · ${accountName}`);
     assert.equal(limits.row?.data, signInCallback);
     assert.ok(Buffer.byteLength(limits.row?.data ?? '') <= 64);
   });
@@ -256,19 +278,19 @@ describe('A Claude account whose sign-in expires, end to end: built charness, fa
     assert.equal(board.row?.data, signInCallback, 'the row to tap is on the board');
     await general.tapAndAwaitAnswer(board.message, board.row?.data ?? '');
     const link = await general.waitForMessage('the sign-in link', (message) => message.text.includes(fakeClaudeLoginUrl));
-    assert.match(link.text, new RegExp(`profile ${account}`));
+    assert.ok(link.text.includes(`profile ${accountName}`), link.text);
     assert.equal(board.message.text, boardTextBefore, 'the board message stays the board — it is not edited into /accounts');
 
     // The login the fake records is the account's new one: the status probe will say signed in.
     fakeTelegram.pushOperatorMessage(generalTopicThreadId, pastedCode);
-    await general.waitForMessage('the sign-in confirmation', (message) => message.text.includes(`Profile ${account} signed in`));
-    const back = await general.waitForMessage('the «signed in again» line', (message) => message.text.includes(`Claude account «${account}» is signed in again`));
+    await general.waitForMessage('the sign-in confirmation', (message) => message.text.includes(`Profile ${accountName} signed in`));
+    const back = await general.waitForMessage('the «signed in again» line', (message) => message.text.includes(`Claude account «${accountName}» is signed in again`));
     assert.ok(back.message_id > 0);
     await getCharness().waitFor('the alert unpinned', replyTimeoutMs, () => !fakeTelegram.listPinnedMessageIds().includes(pinnedAlert.message_id));
     assert.equal(readPersistedState(getLayout()).claudeProfiles?.[account]?.loggedIn, true);
 
     const limits = await readLimitsOfAccount();
-    assert.equal(limits.row?.label, `Claude · ${account}`, 'an ordinary row again');
+    assert.equal(limits.row?.label, `Claude · ${accountName}`, 'an ordinary row again');
     assert.match(limits.row?.data ?? '', /^lim_c_\d+$/);
     assert.equal(limits.line, undefined, 'no figure was polled for it, and no «sign-in expired» line');
   });
@@ -281,8 +303,8 @@ describe('A Claude account whose sign-in expires, end to end: built charness, fa
 
     writeLogin(fakeClaudeExpiredLoginMethod);
     await probeAccounts();
-    const dm = await privateChat.waitForMessage('the private sign-out message', (message) => message.text.includes(`«${account}»`) && message.text.includes('signed out'));
-    assert.equal(dm.text, `🔑 Claude account «${account}» is signed out — its sign-in expired. Tap the button to sign it in again.`);
+    const dm = await privateChat.waitForMessage('the private sign-out message', (message) => message.text.includes(`«${accountName}»`) && message.text.includes('signed out'));
+    assert.equal(dm.text, `🔑 Claude account «${accountName}» is signed out — its sign-in expired. Tap the button to sign it in again.`);
     assert.deepEqual(privateChat.getKeyboardLabels(dm), [['🔑 Sign in again']]);
     assert.deepEqual(privateChat.getKeyboardData(dm), [[signInCallback]]);
     assert.ok(!dm.isSilent, 'a notification: the private chat is what reaches an operator who keeps the group muted');
@@ -304,20 +326,20 @@ describe('A Claude account whose sign-in expires, end to end: built charness, fa
     const textBefore = dm.text;
     await privateChat.tapAndAwaitAnswer(dm, signInCallback);
     const link = await privateChat.waitForMessage('the sign-in link in the private chat', (message) => message.text.includes(fakeClaudeLoginUrl));
-    assert.match(link.text, new RegExp(`profile ${account}`));
+    assert.ok(link.text.includes(`profile ${accountName}`), link.text);
     assert.equal(dm.text, textBefore, 'the private message keeps its text — it is not edited into /accounts');
     assert.deepEqual(privateChat.getKeyboardData(dm), [[signInCallback]], 'and its button');
 
     fakeTelegram.pushPrivateMessage(operator, pastedCode);
-    await privateChat.waitForMessage('the sign-in confirmation in the private chat', (message) => message.text.includes(`Profile ${account} signed in`));
+    await privateChat.waitForMessage('the sign-in confirmation in the private chat', (message) => message.text.includes(`Profile ${accountName} signed in`));
     await getCharness().waitFor(`${account} signed in again`, replyTimeoutMs, () => readPersistedState(getLayout()).claudeProfiles?.[account]?.loggedIn === true);
 
     // The earlier private message is now untrue: it says the account is signed in again and its button is gone.
-    await privateChat.waitForMessageText('the private message turned into «signed in again»', dm, (text) => text === `✅ Claude account «${account}» is signed in again and takes conversations.`);
+    await privateChat.waitForMessageText('the private message turned into «signed in again»', dm, (text) => text === `✅ Claude account «${accountName}» is signed in again and takes conversations.`);
     assert.deepEqual(privateChat.getKeyboardData(dm), [], 'no button on a message that is no longer true');
     assert.equal(readPersistedState(getLayout()).claudeAccountAlerts?.signOutMessageIds, undefined, 'its id is no longer kept');
     assert.equal(listPrivateSignOutMessages().length, 1, 'turned, not repeated: still the one message');
     const limits = await readLimitsOfAccount();
-    assert.equal(limits.row?.label, `Claude · ${account}`);
+    assert.equal(limits.row?.label, `Claude · ${accountName}`);
   });
 });

@@ -144,6 +144,20 @@ describe('buildLimitsBoardRows', () => {
     const rows = buildRows({ detection: detectionOf([profile('work')], ['openai/gpt-5']), words: { claude: 'Клод', openCode: 'ОпенКод' } });
     assert.deepEqual(rows.map((row) => row.label), ['Клод · work', 'ОпенКод · openai']);
   });
+
+  it('an account is named by its display name (its view\'s label), cut with … when a phone would not fit it; the tap still carries the id', () => {
+    const long = 'Sergei Solomatkin — corporate seat';
+    const rows = buildRows({
+      current: claudeHere('work'),
+      detection: detectionOf([profile('default', { label: 'Main' }), profile('work', { label: 'Sergei.Solo@work' }), profile('seat', { label: long }), profile('out', { label: 'Old one', loggedIn: false })]),
+    });
+    assert.deepEqual(rows.map((row) => [row.kind, row.id, row.name, row.label]), [
+      ['claude', 'default', 'Main', 'Claude · Main'],
+      ['claude', 'work', 'Sergei.Solo@work', '✓ Claude · Sergei.Solo@work'],
+      ['claude', 'seat', long, 'Claude · Sergei Solomatkin — cor…'],
+      ['claudeSignIn', 'out', 'Old one', '🔑 Claude · Old one'],
+    ]);
+  });
 });
 
 describe('formatLimitsUsageBlock', () => {
@@ -151,6 +165,14 @@ describe('formatLimitsUsageBlock', () => {
     assert.equal(
       buildBlock({ detection: detectionOf([profile('default', { usage: usageOf(14, 3) })]) }),
       'Usage (% used)\ndefault — ⏱ 5h 14% 🔄 in 3h · week 3% 🔄 in 6d',
+    );
+  });
+
+  it('names an account by its display name, whole — a long one too — and one that cannot work as well', () => {
+    const long = 'Sergei Solomatkin — corporate seat';
+    assert.equal(
+      buildBlock({ detection: detectionOf([profile('work', { label: long, usage: usageOf(14, 3) }), profile('out', { label: 'Old one', ...refused('signedOut') })]) }),
+      `Usage (% used)\n${long} — ⏱ 5h 14% 🔄 in 3h · week 3% 🔄 in 6d\nOld one — 🔑 sign-in expired`,
     );
   });
 

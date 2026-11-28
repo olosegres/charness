@@ -317,7 +317,7 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
       persisted.claudeAutoSwitchOnLimitEnabled = true;
     });
     let launchesBefore = getSessionLaunches(getLayout()).length;
-    await topic.sendAndAwaitReply('/accounts use default', 'Claude account for this topic: default');
+    await topic.sendAndAwaitReply('/accounts use default', 'Claude account for this topic: Main');
     await waitForSessionRespawn(getCharness(), getLayout(), 'the session back on the subscription', null, sessionId, launchesBefore);
     fakeTelegram.pushOperatorMessage(topicThreadId, 'SPEND-1 please carry on');
     await getCharness().waitFor('the subscription turn to set the baseline', agentStartTimeoutMs, () =>
@@ -369,7 +369,7 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     assert.match(listBalanceNotices()[0], new RegExp(`^💸 «${keyAccount}»: the API credits are used up \\(«Credit balance is too low»\\)\\. Waiting does not refill them`));
     assert.match(listBalanceNotices()[0], /\n💳 Spent through the bot on this account: \$0\.50 since \d{2}\.\d{2}\.$/, 'and what it spent');
     const switched = await topic.waitForMessage('the switch notice', (message) => message.message_id > lastMessageId && message.text.startsWith('🔁'));
-    assert.match(switched.text, new RegExp(`«${keyAccount}» .*continues on «default»`));
+    assert.match(switched.text, new RegExp(`«${keyAccount}» .*continues on «Main»`), '~/.claude is «Main» until renamed');
     await waitForSessionRespawn(getCharness(), getLayout(), 'the conversation to continue on the subscription', null, sessionId, launchesBefore);
 
     const persisted = readPersistedState(getLayout());
@@ -419,7 +419,7 @@ describe('An account billed to API credits end to end: built charness, fake Bot 
     assert.equal(retry?.kind, 'usageLimit');
     assert.deepEqual(retry?.resumeOn, { backend: 'claude', profile: 'default', model: null }, 'the wait ends on the subscription');
     assert.ok(Math.abs((retry?.fireAt ?? 0) - (subscriptionResetMs + 60_000)) < 2_000, 'at its reset, not an hour from now');
-    assert.match(listBalanceNotices().at(-1) ?? '', /\n\n.*default/, 'the notice says where and when the work resumes');
+    assert.match(listBalanceNotices().at(-1) ?? '', /\n\n.*continue on Claude · Main · /, 'the notice says where (~/.claude, «Main») and when the work resumes');
   });
 
   it('a scheduled run into the same used-up balance: nothing new in the topic, and its request is answered and no longer woken', async () => {

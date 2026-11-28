@@ -15,6 +15,7 @@ import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
 import { modelPickerNoopCallback } from '../../../utils/modelPickerPlan';
 import { formatClaudeUsageResetAt } from '../../../utils/claudeUsage';
+import { getClaudeProfileLabel, shortenClaudeProfileLabel } from '../../../utils/claudeProfileLabels';
 import { buildSkipArmedRetryCallbackData } from '../../../utils/autoContinueOnLimit';
 import { refreshUsageWithinBudget } from '../../../utils/usageRefreshBudget';
 import {
@@ -159,8 +160,8 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   /** The rung each «add it?» question waits to add; the revision of the list it was asked about rides in its button. */
   const pendingAdds = new Map<string, FallbackChainEntry>();
 
-  function getLabelWords(): { claude: string; openCode: string; topicModel: string } {
-    return { claude: t('fallback.backendClaude'), openCode: t('fallback.backendOpenCode'), topicModel: t('fallback.topicModel') };
+  function getLabelWords(): { claude: string; openCode: string; topicModel: string; profileLabel: (name: string) => string } {
+    return { claude: t('fallback.backendClaude'), openCode: t('fallback.backendOpenCode'), topicModel: t('fallback.topicModel'), profileLabel: getClaudeProfileLabel };
   }
 
   /** The entry for a row or a button. */
@@ -169,16 +170,16 @@ export function createFallbackChain(ports: FallbackChainPorts) {
   }
 
   /**
-   * A rung on its label button: `✓ 1. Claude · work · opus` / `3. OpenCode · openai · gpt-6.1 🚫` — the program, then
-   * the account or provider and the model when the rung names one (Telegram sizes and truncates the button as it sees
-   * fit). The rung's state rides as a suffix (⛔ limited until, 🔒 not signed in, ❓ not offered any more, 💸 API
+   * A rung on its label button: `✓ 1. Claude · Work · opus` / `3. OpenCode · openai · gpt-6.1 🚫` — the program, then
+   * the account (its display name, cut to fit a phone) or provider and the model when the rung names one (Telegram sizes and
+   * truncates the button as it sees fit). The rung's state rides as a suffix (⛔ limited until, 🔒 not signed in, ❓ not offered any more, 💸 API
    * credits used up, 🚫 left out of switching) and ✓ at the start marks where the topic runs now. The one place the label is built: a two-row
    * layout (label on its own row) only changes how `buildPicker` assembles the row.
    */
   function formatRowButtonLabel(index: number, entry: FallbackChainEntry, detection: FallbackDetection, current: FallbackChainEntry | null, nowMs: number): string {
     const words = getLabelWords();
     const base = entry.backend === 'claude'
-      ? `${words.claude} · ${entry.profile}${entry.model === null ? '' : ` · ${entry.model}`}`
+      ? `${words.claude} · ${shortenClaudeProfileLabel(words.profileLabel(entry.profile))}${entry.model === null ? '' : ` · ${entry.model}`}`
       : `${words.openCode} · ${entry.providerId} · ${entry.modelId}`;
     const availability = getFallbackEntryAvailability(entry, detection, nowMs);
     let suffix = '';
@@ -327,7 +328,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     const rows: ReturnType<typeof Markup.button.callback>[][] = [];
     for (const profile of detection.claudeProfiles) {
       if (profile.loggedIn === false) continue;
-      rows.push([Markup.button.callback(`${words.claude} · ${profile.name}`, buildFallbackAddClaudeCallback(profile.name))]);
+      rows.push([Markup.button.callback(`${words.claude} · ${shortenClaudeProfileLabel(words.profileLabel(profile.name))}`, buildFallbackAddClaudeCallback(profile.name))]);
     }
     const providers = listOpenCodeProviders(detection.openCodeModels);
     providers.forEach((providerId, index) => {
@@ -347,7 +348,7 @@ export function createFallbackChain(ports: FallbackChainPorts) {
     const rows = [[Markup.button.callback(t('fallback.topicModelButton'), buildFallbackAddClaudeModelCallback(profile, null))]];
     rows.push(fallbackClaudeModelAliases.map((model) => Markup.button.callback(model, buildFallbackAddClaudeModelCallback(profile, model))));
     rows.push(buildBackRow());
-    await editThreadMessage(key, messageId, t('fallback.pickModel', { account: `${getLabelWords().claude} · ${profile}` }), Markup.inlineKeyboard(rows));
+    await editThreadMessage(key, messageId, t('fallback.pickModel', { account: `${getLabelWords().claude} · ${getClaudeProfileLabel(profile)}` }), Markup.inlineKeyboard(rows));
   }
 
   /** Step 2 for an OpenCode provider: one page of its models (absolute indexes into the snapshot), limit marks on the limited ones. */

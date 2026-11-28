@@ -6,7 +6,7 @@
  * the topic again (`/limits`, the board of every account and provider, whatever the backend: the owner's decision,
  * spelled in the `fallback.switchedReset` / `fallback.switchedBack` texts).
  *
- * A Claude rung is named by its account alone (`«work»`), with the model added only when the switch changes it
+ * A Claude rung is named by its account alone — its display name (`«work»`) —, with the model added only when the switch changes it
  * (`«work» (sonnet)`); a switch that stays on the SAME account (the limit covered the model it ran, not the one picked)
  * says the model hit the limit: `Model claude-fable-5-1 hit its usage limit — this topic continues on «work» (sonnet)`;
  * an OpenCode rung by its backend and model (`OpenCode openai/gpt-5`) and, as the side that hit the limit, by its model
@@ -18,11 +18,12 @@
  */
 
 import { t } from '../i18n';
+import { getClaudeProfileLabel } from './claudeProfileLabels';
 import { buildOpenCodeModelLabel, getFallbackModelToPin, type FallbackChainEntry } from './fallbackChain';
 
-/** A name as the notices show it: between guillemets, so a profile called `default` or `work` reads as a name. */
+/** An account as the notices show it: its display name (`utils/claudeProfileLabels.ts`) between guillemets, so `Main` or `work` reads as a name. */
 function quoteName(name: string): string {
-  return `«${name}»`;
+  return `«${getClaudeProfileLabel(name)}»`;
 }
 
 /**

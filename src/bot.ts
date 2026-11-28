@@ -356,7 +356,7 @@ import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, creat
 import { readTaskAgentLimit, type TaskAgentLimitSources } from './trackers/taskAgentLimit';
 import { TaskAgentSlots } from './trackers/taskAgentSlots';
 import { checkIsBotSkillsEnabled, createBotSkillsReader, readBotSkillsInstanceValue, setBotSkillsReader, type BotSkillsSources } from './utils/botSkills';
-import { setClaudeProfileLabelReader } from './utils/claudeProfileLabels';
+import { getClaudeProfileLabel, setClaudeProfileLabelReader } from './utils/claudeProfileLabels';
 import { quietPeriodMs } from './selfUpdate/constants';
 import { getLaunchEnvironment } from './selfUpdate/launchEnvironment';
 import { createDefaultReexecDeps, reexecProcess } from './selfUpdate/restart';
@@ -2773,7 +2773,7 @@ async function announceUsageLimitOrSwitch(
   if (plan.action === 'auto') {
     const to = plan.to;
     const outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true, isAutomatic: true }).catch((e) => {
-      console.warn(`[fallback] ${keyToString(key)}: the auto-switch to ${formatFallbackEntry(to)} failed:`, e instanceof Error ? e.message : e);
+      console.warn(`[fallback] ${keyToString(key)}: the auto-switch to ${formatFallbackEntryById(to)} failed:`, e instanceof Error ? e.message : e);
       return { isSwitched: false };
     });
     if (outcome.isSwitched) return;
@@ -2801,10 +2801,10 @@ function buildFallbackSwitchKeyboard(episodeId: number, candidates: readonly Fal
   ]));
 }
 
-/** Whose API credits a balance notice names: a Claude account `«console»`, an OpenCode `provider/model`. */
+/** Whose API credits a balance notice names: a Claude account by its display name `«Console»`, an OpenCode `provider/model`. */
 function formatBalanceOwner(from: FallbackChainEntry | null): string {
   if (from === null) return t('fallback.backendClaude');
-  return from.backend === 'claude' ? `«${from.profile}»` : buildOpenCodeModelLabel(from);
+  return from.backend === 'claude' ? `«${getClaudeProfileLabel(from.profile)}»` : buildOpenCodeModelLabel(from);
 }
 
 /**
@@ -2851,7 +2851,7 @@ async function handleBalanceExhausted(key: SessionKey, cls: AgentApiErrorClass):
     try {
       if (checkIsTelegramKey(key)) await replyToThread(key, notice);
       outcome = await switchTopicToFallbackEntry(key, plan.from, to, { isAnnounced: true, isAutomatic: true, ending }).catch((e) => {
-        console.warn(`[fallback] ${k}: the auto-switch to ${formatFallbackEntry(to)} failed:`, e instanceof Error ? e.message : e);
+        console.warn(`[fallback] ${k}: the auto-switch to ${formatFallbackEntryById(to)} failed:`, e instanceof Error ? e.message : e);
         return { isSwitched: false };
       });
     } finally {
@@ -3195,7 +3195,7 @@ const {
   clearAuthNotice,
   execFileAsync,
   onClaudeProfileAuthStatus: (key, profile, status) => claudeProfileAuthStatusSink?.(key, profile, status) ?? Promise.resolve(),
-  onClaudeProfileApiKey: (key, profile, apiKey) => claudeProfileApiKeySink?.(key, profile, apiKey) ?? Promise.resolve(t('account.apiKeyNoDirectory', { name: profile.name })),
+  onClaudeProfileApiKey: (key, profile, apiKey) => claudeProfileApiKeySink?.(key, profile, apiKey) ?? Promise.resolve(t('account.apiKeyNoDirectory', { name: getClaudeProfileLabel(profile.name) })),
   checkIsProfileMissingFromLimitsList: (name) => checkIsClaudeProfileMissingFromChain(state.getFallbackChain(), name),
 });
 
@@ -9298,7 +9298,7 @@ async function deliverClaudeAccountAlert(alert: ClaudeAccountAlert): Promise<voi
 
 /**
  * @description The account alert in General, like the updater's: worded in that chat's language, the sign-in named as
- * `/accounts login <name>`; an alert that asks to act is pinned (the pin is what reaches a muted operator) in place of the previous
+ * `/accounts login <display name>`; an alert that asks to act is pinned (the pin is what reaches a muted operator) in place of the previous
  * one, and once no told account is left unusable the pin goes. `isPrivateChatClosed`: Telegram refused the private message about a
  * signed-out account (403) — the alert then also asks the operator to open a private chat with the bot.
  */
@@ -9309,7 +9309,7 @@ async function postClaudeAccountAlertToGeneral(alert: ClaudeAccountAlert, option
     return;
   }
   const renderOptions = options.isPrivateChatClosed ? { closedPrivateChatBot: getBotLabel() } : {};
-  const text = withThreadLocale(generalKey, () => renderClaudeAccountAlert(alert, (name) => `/accounts login ${name}`, renderOptions));
+  const text = withThreadLocale(generalKey, () => renderClaudeAccountAlert(alert, (name) => `/accounts login ${getClaudeProfileLabel(name)}`, renderOptions));
   const messageId = await replyToThread(generalKey, text);
   if (alert.lost.length === 0 || messageId === null) {
     await releaseClaudeAccountAlertPin();
@@ -9384,7 +9384,7 @@ async function settleClaudeAccountSignOutDms(alert: ClaudeAccountAlert): Promise
  */
 async function markClaudeAccountSignOutDmSignedIn(privateKey: SessionKey, name: string, messageId: number): Promise<void> {
   await state.setClaudeAccountAlertSignOutMessageId(name, null);
-  const text = withThreadLocale(privateKey, () => t('accounts.alert.back', { name }));
+  const text = withThreadLocale(privateKey, () => t('accounts.alert.back', { name: getClaudeProfileLabel(name) }));
   if (await editThreadMessage(privateKey, messageId, text)) console.log(`[accounts] the private message about ${name} now says it is signed in again`);
   else console.warn(`[accounts] the private message about ${name} could not be turned into «signed in again»`);
 }
@@ -9476,7 +9476,7 @@ async function handleClaudeAuthRefusal(key: SessionKey, cls: AgentApiErrorClass)
   if (!checkIsTelegramKey(key) && requestLimitWaitAnswerDeps) {
     await answerOpenRequestsWithBotNotice(requestLimitWaitAnswerDeps, key, {
       identity: `claudeAccountMove:${instead}`,
-      body: t('requests.account.movedAnswer', { from: from.profile, reason: formatClaudeAccountRefusal(reason), to: instead }),
+      body: t('requests.account.movedAnswer', { from: getClaudeProfileLabel(from.profile), reason: formatClaudeAccountRefusal(reason), to: getClaudeProfileLabel(instead) }),
       isWakeStopped: false,
     }).catch((e) => console.warn(`[accounts] ${k}: telling the requests about the move failed:`, e instanceof Error ? e.message : e));
   }
@@ -9504,7 +9504,7 @@ async function waitForClaudeAccount(key: SessionKey): Promise<void> {
   }
   const reasons = getClaudeProfileUsageViews()
     .map((view) => ({ name: view.name, usability: getClaudeProfileUsability(state.getClaudeProfileInfo(view.name)) }))
-    .flatMap(({ name, usability }) => (usability === 'usable' ? [] : [`«${name}» ${formatClaudeAccountRefusal(usability)}`]))
+    .flatMap(({ name, usability }) => (usability === 'usable' ? [] : [`«${getClaudeProfileLabel(name)}» ${formatClaudeAccountRefusal(usability)}`]))
     .join('; ');
   await answerOpenRequestsWithBotNotice(requestLimitWaitAnswerDeps, key, {
     // One wait, one answer per request: a later refused turn of the same wait (a new request's prompt) answers only the new request.
@@ -9769,7 +9769,7 @@ function readStatusAccountSource(name: string): ThreadStatusAccountSource {
   syncClaudeApiCreditAnchors();
   const info = state.getClaudeProfileInfo(name);
   return {
-    name, email: info?.email ?? null, loggedIn: getClaudeProfileSignedIn(info), limitedUntil: info?.limitedUntil ?? null,
+    name, label: getClaudeProfileLabel(name), email: info?.email ?? null, loggedIn: getClaudeProfileSignedIn(info), limitedUntil: info?.limitedUntil ?? null,
     billing: info?.billing ?? null, creditExhaustedAt: info?.creditExhaustedAt ?? null, ...(info?.apiSpend ? { apiSpend: info.apiSpend } : {}),
   };
 }
@@ -9782,8 +9782,16 @@ function checkIsClaudeProfileBackend(key: SessionKey): boolean {
 
 // ── the fallback chain (`/fallback`): `utils/fallbackChain.ts`, `utils/fallbackBridge.ts`, `commands/fallbackChain.ts` ──
 
-/** A chain rung for the topic's own language (the picker and the notices name it the same way). */
+/** A chain rung for the topic's own language (the picker and the notices name it the same way: an account by its display name). */
 function formatFallbackEntry(entry: FallbackChainEntry): string {
+  return formatFallbackEntryLabel(entry, { claude: t('fallback.backendClaude'), openCode: t('fallback.backendOpenCode'), topicModel: t('fallback.topicModel'), profileLabel: getClaudeProfileLabel });
+}
+
+/**
+ * A chain rung for the log and for the agent's context bridge: the same words, an account by its fixed id — what agents record and pass
+ * to `claude_profiles` (a display name may change, and may hold an email).
+ */
+function formatFallbackEntryById(entry: FallbackChainEntry): string {
   return formatFallbackEntryLabel(entry, { claude: t('fallback.backendClaude'), openCode: t('fallback.backendOpenCode'), topicModel: t('fallback.topicModel') });
 }
 
@@ -9942,9 +9950,9 @@ async function planFallbackSwitch(key: SessionKey, cls: AgentApiErrorClass, epis
   });
   if (plan.action === 'offer') fallbackSwitchOffers.set(k, { episodeId, from, candidates: plan.candidates });
   else fallbackSwitchOffers.delete(k);
-  const detail = plan.action === 'auto' ? ` → ${formatFallbackEntry(plan.to)}` : plan.action === 'offer' ? ` [${plan.candidates.map(formatFallbackEntry).join(', ')}]` : '';
+  const detail = plan.action === 'auto' ? ` → ${formatFallbackEntryById(plan.to)}` : plan.action === 'offer' ? ` [${plan.candidates.map(formatFallbackEntryById).join(', ')}]` : '';
   // Nothing has room: the wait should end on the rung whose limit resets EARLIEST, not necessarily this one.
-  console.log(`[fallback] ${k}: usage limit on ${formatFallbackEntry(from)}; switch plan: ${plan.action}${detail}${waitTarget ? `; earliest reset: ${formatFallbackEntry(waitTarget.entry)} at ${new Date(waitTarget.untilMs).toISOString()}` : ''}`);
+  console.log(`[fallback] ${k}: usage limit on ${formatFallbackEntryById(from)}; switch plan: ${plan.action}${detail}${waitTarget ? `; earliest reset: ${formatFallbackEntryById(waitTarget.entry)} at ${new Date(waitTarget.untilMs).toISOString()}` : ''}`);
   return { ...plan, from, earliest: waitTarget };
 }
 
@@ -9967,7 +9975,7 @@ function getFallbackSwitchedNotice(from: FallbackChainEntry | null, to: Fallback
   const notice = buildFallbackSwitchedNotice({ from, to, resetTime: getFallbackResetTime(from), runningModel, reason });
   const info = to.backend === 'claude' ? state.getClaudeProfileInfo(to.profile) : undefined;
   if (to.backend !== 'claude' || info?.billing !== 'api') return notice;
-  return `${notice}\n${t('fallback.switchedToApi', { name: to.profile, spent: formatUsd(info.apiSpend?.totalUsd ?? 0) })}`;
+  return `${notice}\n${t('fallback.switchedToApi', { name: getClaudeProfileLabel(to.profile), spent: formatUsd(info.apiSpend?.totalUsd ?? 0) })}`;
 }
 
 /** The spend line a «credits used up» notice ends with (what the account spent through the bot); `''` before any spend. */
@@ -10091,7 +10099,6 @@ async function switchTopicToFallbackEntryNow(
 ): Promise<{ isSwitched: boolean; notice: string; isFailed?: boolean }> {
   const reason = options.reason ?? 'limit';
   const k = keyToString(key);
-  const fromLabel = from ? formatFallbackEntry(from) : '?';
   const toLabel = formatFallbackEntry(to);
   const runningModel = readRunningModelBeforeMove(key, from, to);
   // The notice is a topic message: a conversation of another platform (a Jira issue) hears nothing — the log line below says it — and
@@ -10140,8 +10147,8 @@ async function switchTopicToFallbackEntryNow(
     let bridge: string;
     try {
       bridge = await buildFallbackBridge(key, {
-        fromLabel: from ? formatFallbackEntry(from) : formatThreadBackend(key),
-        toLabel: toLabel,
+        fromLabel: from ? formatFallbackEntryById(from) : formatThreadBackend(key),
+        toLabel: formatFallbackEntryById(to),
         reason: 'limit',
         resetsAtText: getFallbackResetTime(from),
       });
@@ -10164,7 +10171,7 @@ async function switchTopicToFallbackEntryNow(
   try {
     cancelApiRetry(key); // retires the offer too: the switch consumed it
     const notice = `${getFallbackSwitchedNotice(from, to, runningModel, reason)}${isStoppingBackground ? `\n${t('fallback.backgroundStopped')}` : ''}`;
-    console.log(`[fallback] ${k}: switched from ${fromLabel} to ${toLabel} after ${reason === 'signIn' ? 'its account was refused' : 'a usage limit'}${firstPrompt ? ' (cross-backend, bridged)' : ''}; resuming`);
+    console.log(`[fallback] ${k}: switched from ${from ? formatFallbackEntryById(from) : '?'} to ${formatFallbackEntryById(to)} after ${reason === 'signIn' ? 'its account was refused' : 'a usage limit'}${firstPrompt ? ' (cross-backend, bridged)' : ''}; resuming`);
     await say(notice);
     await resumeTopicOnNewSession(key, {
       modelToPin: getFallbackModelToPin(to, runningModel),
@@ -10401,7 +10408,7 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
       const moved = await switchTopicToFallbackEntry(key, from, to, { isAnnounced: true });
       if (moved.isFailed) return { kind: 'refused', text: moved.notice };
       if (to.backend === 'opencode') return { kind: 'switched', text: t('backendSwitch.switched', { to: label }), label };
-      return { kind: 'switched', text: t('account.setThisTopic', { name: to.profile, apply: t(`account.applied.${moved.isSwitched ? 'respawned' : 'deferred'}`) }), label };
+      return { kind: 'switched', text: t('account.setThisTopic', { name: getClaudeProfileLabel(to.profile), apply: t(`account.applied.${moved.isSwitched ? 'respawned' : 'deferred'}`) }), label };
     }
     case 'sameFamily': {
       if (to.backend === 'opencode') {
@@ -10416,7 +10423,7 @@ async function switchTopicByOperator(key: SessionKey, to: FallbackChainEntry): P
       if (!isModelChangeOnly) {
         await state.setClaudeProfileOverride(key, to.profile);
         const outcome = await applyClaudeProfileToThread(key);
-        switchedText = t('account.setThisTopic', { name: to.profile, apply: t(`account.applied.${outcome}`) });
+        switchedText = t('account.setThisTopic', { name: getClaudeProfileLabel(to.profile), apply: t(`account.applied.${outcome}`) });
       }
       const modelToPin = getFallbackModelToPin(to, runningModel);
       if (modelToPin === null) return { kind: 'switched', text: switchedText === '' && to.model !== null ? t('cb.model_set', { model: to.model }) : switchedText, label };

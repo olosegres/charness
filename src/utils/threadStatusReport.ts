@@ -8,6 +8,8 @@ import { formatClaudeApiSpendWords } from './claudeProfileUsageLines';
 /** One Claude account profile as `/status` names it. */
 export interface ThreadStatusAccountSource {
   name: string;
+  /** What the account is called (its display name, `utils/claudeProfileLabels.ts`); the id when absent. */
+  label?: string;
   /** What the last `claude auth status` read said; `null` when never probed. */
   email: string | null;
   /** That read's sign-in answer; `undefined` when never probed. A signed-out profile may keep an old email. */
@@ -115,11 +117,12 @@ export function getThreadStatusReport({
 }
 
 /**
- * @description `name · email` like an `/accounts` row (`name · not signed in` once a probe said so, the name
+ * @description `name · email` like an `/accounts` row — the account's display name — (`name · not signed in` once a probe said so, the name
  * alone when never probed), `· 💳 API` for an account billed to the API, `· 💸 credits used up` while that mark holds,
  * plus the `/accounts` limit mark while it lies in the future, reset in the instance zone.
  */
-function formatAccount({ name, email, loggedIn, limitedUntil, billing, creditExhaustedAt }: ThreadStatusAccountSource, timezone: string, nowMs: number): string {
+function formatAccount({ name: id, label, email, loggedIn, limitedUntil, billing, creditExhaustedAt }: ThreadStatusAccountSource, timezone: string, nowMs: number): string {
+  const name = label ?? id;
   const detail = loggedIn === false ? t('account.row.loggedOut') : email;
   const metered = `${billing === 'api' ? t('status.thread_account_api') : ''}${creditExhaustedAt ? t('status.thread_account_exhausted') : ''}`;
   const limited = limitedUntil !== null && Date.parse(limitedUntil) > nowMs
@@ -135,7 +138,7 @@ function formatAccount({ name, email, loggedIn, limitedUntil, billing, creditExh
 export function formatThreadStatusAccountLines({ current, pending, nowMs }: ThreadStatusAccount, timezone: string): string[] {
   const lines = [t('status.thread_account', { account: formatAccount(current, timezone, nowMs) })];
   if (current.billing === 'api' && current.apiSpend) {
-    lines.push(t('status.thread_api_spend', { name: current.name, ...formatClaudeApiSpendWords(current.apiSpend, timezone, nowMs) }));
+    lines.push(t('status.thread_api_spend', { name: current.label ?? current.name, ...formatClaudeApiSpendWords(current.apiSpend, timezone, nowMs) }));
   }
   if (pending !== null) lines.push(t('status.thread_account_pending', { account: formatAccount(pending, timezone, nowMs) }));
   return lines;

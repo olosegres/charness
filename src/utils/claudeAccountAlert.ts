@@ -16,11 +16,13 @@
  * «signed in again» (a repeat of that refusal is held until a new login, `utils/claudeAuthRefusal.ts`).
  *
  * Pure: the bot passes the states, the details and the account new conversations go to; the texts come from the active
- * locale (`accounts.alert.*`, `accounts.refusal.*`).
+ * locale (`accounts.alert.*`, `accounts.refusal.*`) and name each account by its display name (`utils/claudeProfileLabels.ts`) — the
+ * record and the button keep its id.
  */
 
 import { t } from '../i18n';
 import { buildAccountSignInCallback } from './claudeAccountPickerPlan';
+import { getClaudeProfileLabel } from './claudeProfileLabels';
 import type { ClaudeProfileUsability } from './claudeAuthRefusal';
 
 /** What the operator was told of the accounts, as `state.json` keeps it. */
@@ -123,8 +125,8 @@ export function formatClaudeAccountRefusal(usability: Exclude<ClaudeProfileUsabi
 }
 
 /**
- * @description The alert in the active locale. `getSignInHow` says how to sign an account in where this text is read
- * (`/accounts login work` in Telegram, `CLAUDE_CONFIG_DIR=… claude auth login` on the host). A lost account gets its sentence,
+ * @description The alert in the active locale. `getSignInHow` says how to sign an account in (given its id) where this text is read
+ * (`/accounts login Work` — its display name — in Telegram, `CLAUDE_CONFIG_DIR=… claude auth login` on the host). A lost account gets its sentence,
  * the CLI's words when there are any and what to do; then one line on where the conversations went — and, when
  * `options.closedPrivateChatBot` names the bot (the operator's private chat refused the private message about a signed-out account:
  * they never opened it), one line asking them to open a private chat with it and press Start; an account usable again one line.
@@ -136,19 +138,19 @@ export function renderClaudeAccountAlert(
 ): string {
   const paragraphs: string[] = [];
   for (const loss of alert.lost) {
-    const lines = [t('accounts.alert.title', { name: loss.name, reason: formatClaudeAccountRefusal(loss.usability) })];
+    const lines = [t('accounts.alert.title', { name: getClaudeProfileLabel(loss.name), reason: formatClaudeAccountRefusal(loss.usability) })];
     if (loss.detail !== null) lines.push(t('accounts.alert.cliSaid', { detail: loss.detail }));
     const how = getSignInHow(loss.name);
     lines.push(loss.usability === 'orgDisabled' ? t('accounts.alert.fixOrg', { how }) : t('accounts.alert.fixSignIn', { how }));
     paragraphs.push(lines.join('\n'));
   }
   if (alert.lost.length > 0) {
-    paragraphs.push(alert.instead === null ? t('accounts.alert.noneUsable') : t('accounts.alert.movedTo', { to: alert.instead }));
+    paragraphs.push(alert.instead === null ? t('accounts.alert.noneUsable') : t('accounts.alert.movedTo', { to: getClaudeProfileLabel(alert.instead) }));
   }
   if (options.closedPrivateChatBot !== undefined && listClaudeAccountSignOutNames(alert).length > 0) {
     paragraphs.push(t('accounts.alert.openPrivateChat', { bot: options.closedPrivateChatBot }));
   }
-  for (const name of alert.back) paragraphs.push(t('accounts.alert.back', { name }));
+  for (const name of alert.back) paragraphs.push(t('accounts.alert.back', { name: getClaudeProfileLabel(name) }));
   return paragraphs.join('\n\n');
 }
 
@@ -172,7 +174,7 @@ export interface ClaudeAccountSignOutDm {
 /** @description The private message about the signed-out account `name`, in the active locale. */
 export function renderClaudeAccountSignOutDm(name: string): ClaudeAccountSignOutDm {
   return {
-    text: t('accounts.signOutDm.text', { name }),
+    text: t('accounts.signOutDm.text', { name: getClaudeProfileLabel(name) }),
     buttonLabel: t('accounts.signOutDm.button'),
     callbackData: buildAccountSignInCallback(name),
   };

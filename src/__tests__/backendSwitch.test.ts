@@ -78,7 +78,7 @@ describe('backendSwitch: the question over its ports', () => {
     const messageId = await ask({ from: 'opencode', target: toClaude });
     const question = harness.replies.at(-1);
     assert.equal(question?.messageId, messageId);
-    assert.equal(question?.text, '🔁 Switch this topic from OpenCode to Claude «default»?\nThe conversation context will be handed over in compacted form.');
+    assert.equal(question?.text, '🔁 Switch this topic from OpenCode to Claude «Main»?\nThe conversation context will be handed over in compacted form.');
     assert.deepEqual(harness.getKeyboardLabels(question), [['✅ Continue', '✖️ Cancel']]);
     assert.deepEqual(harness.getKeyboardData(question), [['bsw_ok', 'bsw_no']]);
   });
@@ -187,7 +187,7 @@ describe('backendSwitch: the question over its ports', () => {
       const messageId = await ask({ from: 'opencode', target: toClaude });
       await harness.tapButton(messageId, 'bsw_ok');
       const last = harness.edits.filter((edit) => edit.messageId === messageId).at(-1);
-      assert.equal(last?.text, '⚠️ Switching to Claude «default» failed: the OpenCode server is down');
+      assert.equal(last?.text, '⚠️ Switching to Claude «Main» failed: the OpenCode server is down');
     } finally {
       switchError = null;
     }

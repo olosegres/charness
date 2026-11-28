@@ -21,6 +21,7 @@ import {
   getBackendFamily,
   getBackendSwitchModelToPin,
 } from '../utils/backendSwitchPlan';
+import { setClaudeProfileLabelReader } from '../utils/claudeProfileLabels';
 import { claudeJsonStreamAdapterName, claudePerTurnAdapterName, openCodeAdapterName } from '../adapters/adapterNames';
 
 const handoverLine = 'The conversation context will be handed over in compacted form.';
@@ -56,11 +57,18 @@ describe('checkNeedsBackendSwitchConfirmation', () => {
 });
 
 describe('the question (English)', () => {
-  it('OpenCode → Claude names the account; Claude → OpenCode names the model; an unknown model is just OpenCode', () => {
+  it('OpenCode → Claude names the account (~/.claude as «Main», a renamed one by its display name); Claude → OpenCode names the model; an unknown model is just OpenCode', () => {
     assert.equal(
       buildBackendSwitchQuestion({ from: 'opencode', target: { backend: 'claude', profile: 'default', isProfilePicked: false, model: null } }),
-      `🔁 Switch this topic from OpenCode to Claude «default»?\n${handoverLine}`,
+      `🔁 Switch this topic from OpenCode to Claude «Main»?\n${handoverLine}`,
     );
+    setClaudeProfileLabelReader((name) => (name === 'work' ? 'Sergei.Solo@work' : undefined));
+    try {
+      assert.equal(formatBackendSwitchTarget({ backend: 'claude', profile: 'work', isProfilePicked: true, model: 'sonnet' }), 'Claude «Sergei.Solo@work» (sonnet)');
+      assert.equal(formatBackendSwitchBridgeLabel({ backend: 'claude', profile: 'work', isProfilePicked: true, model: null }), 'Claude · work', 'the agent\'s bridge keeps the id');
+    } finally {
+      setClaudeProfileLabelReader(() => undefined);
+    }
     assert.equal(
       buildBackendSwitchQuestion({ from: 'claude', target: { backend: 'opencode', modelLabel: 'openai/gpt-5', model: null } }),
       `🔁 Switch this topic from Claude to OpenCode openai/gpt-5?\n${handoverLine}`,
@@ -108,8 +116,8 @@ describe('a target that names a model', () => {
 for (const locale of localeCodes) {
   describe(`the question in ${locale}`, () => {
     it('names both sides once, carries the shared hand-over line and has no placeholder left', () => {
-      const text = runWithLocale(locale as Locale, () => buildBackendSwitchQuestion({ from: 'opencode', target: { backend: 'claude', profile: 'default', isProfilePicked: false, model: null } }));
-      assert.equal(text.split('«default»').length - 1, 1, text);
+      const text = runWithLocale(locale as Locale, () => buildBackendSwitchQuestion({ from: 'opencode', target: { backend: 'claude', profile: 'work', isProfilePicked: false, model: null } }));
+      assert.equal(text.split('«work»').length - 1, 1, text);
       assert.ok(text.includes('OpenCode') && text.includes('Claude'), text);
       assert.ok(!/\{\w+\}/.test(text), text);
       const note = runWithLocale(locale as Locale, () => formatBackendSwitchTarget({ backend: 'opencode', modelLabel: null, model: null }));

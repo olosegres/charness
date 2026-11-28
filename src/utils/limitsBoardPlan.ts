@@ -2,7 +2,7 @@
  * @description The `/limits` switch board in two pure pieces:
  *
  *   - the ROWS — one per Claude account (in `/accounts` order), then one per connected OpenCode provider (in
- *     catalog order), each labelled `[✓ ]<program> · <account or provider>` and nothing else: the buttons carry no usage,
+ *     catalog order), each labelled `[✓ ]<program> · <account or provider>` (an account by its display name, `utils/claudeProfileLabels.ts`) and nothing else: the buttons carry no usage,
  *     no reset and no model (the figures do not fit a phone's button) — only an account billed to API credits ends in
  *     ` 💳` (a tap on it spends money). The `✓` marks the active row only — where the
  *     topic runs now, in General the default Claude account. An account that CANNOT WORK and that a sign-in mends (signed out, its
@@ -21,6 +21,7 @@
 
 import { t } from '../i18n';
 import { checkIsClaudeUsabilityMendedBySignIn, getClaudeProfileUsability, type ClaudeProfileUsability } from './claudeAuthRefusal';
+import { shortenClaudeProfileLabel } from './claudeProfileLabels';
 import { formatClaudeProfileUsageLines } from './claudeProfileUsageLines';
 import {
   getRunningModelOfProvider,
@@ -53,16 +54,18 @@ const chatGptBrandName = 'ChatGPT';
 export interface LimitsBoardRow {
   /** `claudeSignIn`: a Claude account that cannot work and that a sign-in mends — its tap starts the sign-in, it is never a switch target. */
   kind: 'claude' | 'claudeSignIn' | 'opencode';
-  /** The Claude account's name, or the OpenCode provider's id — what a tap acts on. */
+  /** The Claude account's fixed id, or the OpenCode provider's id — what a tap acts on. */
   id: string;
+  /** What the row is called: a Claude account's display name (`utils/claudeProfileLabels.ts`), a provider's id. */
+  name: string;
   label: string;
-  /** The topic runs on this account / provider (in General: this is the default Claude account). */
+  /** The topic runs on this account / provider (in General: this is the Claude account for all topics). */
   isActive: boolean;
 }
 
 export interface LimitsBoardInput {
   detection: FallbackDetection;
-  /** Where the topic runs; in General the default Claude account (no model); `null` for no agent / an unknown OpenCode model. */
+  /** Where the topic runs; in General the Claude account for all topics (no model); `null` for no agent / an unknown OpenCode model. */
   current: FallbackChainEntry | null;
   /** The localised program names (`Claude` / `OpenCode`). */
   words: { claude: string; openCode: string };
@@ -71,10 +74,12 @@ export interface LimitsBoardInput {
 /** The mark after an account billed to API credits: every request on it costs money. */
 const meteredMark = ' 💳';
 
+/** A row: its label is `[✓ |🔑 ]<program> · <name>[ 💳]`, an account's name cut to fit a phone (the message above shows it whole). */
 function buildRow(row: Omit<LimitsBoardRow, 'label'> & { program: string; isMetered?: boolean }): LimitsBoardRow {
   const { program, isMetered, ...rest } = row;
   const mark = row.kind === 'claudeSignIn' ? signInMark : row.isActive ? activeMark : '';
-  return { ...rest, label: `${mark}${program} · ${row.id}${isMetered ? meteredMark : ''}` };
+  const name = row.kind === 'opencode' ? row.name : shortenClaudeProfileLabel(row.name);
+  return { ...rest, label: `${mark}${program} · ${name}${isMetered ? meteredMark : ''}` };
 }
 
 /**
@@ -88,12 +93,13 @@ export function buildLimitsBoardRows(input: LimitsBoardInput): LimitsBoardRow[] 
   for (const profile of input.detection.claudeProfiles) {
     const usability = getClaudeProfileUsability(profile);
     if (usability !== 'usable') {
-      if (checkIsClaudeUsabilityMendedBySignIn(usability)) rows.push(buildRow({ kind: 'claudeSignIn', id: profile.name, program: input.words.claude, isActive: false }));
+      if (checkIsClaudeUsabilityMendedBySignIn(usability)) rows.push(buildRow({ kind: 'claudeSignIn', id: profile.name, name: profile.label ?? profile.name, program: input.words.claude, isActive: false }));
       continue;
     }
     rows.push(buildRow({
       kind: 'claude',
       id: profile.name,
+      name: profile.label ?? profile.name,
       program: input.words.claude,
       isActive: current?.backend === 'claude' && current.profile === profile.name,
       isMetered: profile.billing === 'api',
@@ -103,6 +109,7 @@ export function buildLimitsBoardRows(input: LimitsBoardInput): LimitsBoardRow[] 
     rows.push(buildRow({
       kind: 'opencode',
       id: providerId,
+      name: providerId,
       program: input.words.openCode,
       isActive: getRunningModelOfProvider(current, providerId) !== null,
     }));
@@ -144,13 +151,14 @@ export function formatLimitsUsageBlock(input: LimitsUsageBlockInput): string {
   const entries: string[] = [];
   for (const profile of input.detection.claudeProfiles) {
     const usability = getClaudeProfileUsability(profile);
+    const name = profile.label ?? profile.name;
     if (usability !== 'usable') {
-      entries.push(`${profile.name} — ${formatUnusableMark(usability)}`);
+      entries.push(`${name} — ${formatUnusableMark(usability)}`);
       continue;
     }
     const usageLines = formatClaudeProfileUsageLines(profile, input.timezone, input.nowMs);
     // An account billed to API credits has no windows: its entry says how it pays, the used-up mark hangs under it.
-    const entry = formatUsageEntry(profile.name, profile.billing === 'api' ? [t('account.kind.api'), ...usageLines] : usageLines);
+    const entry = formatUsageEntry(name, profile.billing === 'api' ? [t('account.kind.api'), ...usageLines] : usageLines);
     if (entry !== null) entries.push(entry);
   }
   for (const providerId of listOpenCodeProviders(input.detection.openCodeModels)) {

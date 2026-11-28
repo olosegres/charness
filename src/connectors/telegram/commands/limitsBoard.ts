@@ -17,6 +17,7 @@ import { t } from '../../../i18n';
 import type { InboundCommand } from '../../../platform/inbound';
 import { buildSkipArmedRetryCallbackData } from '../../../utils/autoContinueOnLimit';
 import { buildAccountSignInCallback } from '../../../utils/claudeAccountPickerPlan';
+import { getClaudeProfileLabel } from '../../../utils/claudeProfileLabels';
 import {
   listOpenCodeModelsOfProvider,
   type FallbackChainEntry,
@@ -139,7 +140,7 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
     return { claude: t('fallback.backendClaude'), openCode: t('fallback.backendOpenCode') };
   }
 
-  /** Where the topic runs; in General the default Claude account (the ✓ of the board there). */
+  /** Where the topic runs; in General the Claude account for all topics (the ✓ of the board there). */
   function getCurrentRung(key: SessionKey, isGeneral: boolean): FallbackChainEntry | null {
     return isGeneral ? { backend: 'claude', profile: getState().getClaudeProfileGlobalDefault(), model: null } : getTopicPosition(key);
   }
@@ -241,6 +242,7 @@ export function createLimitsBoard(ports: LimitsBoardPorts) {
       : buildProviderModelPage({
         program: t('fallback.backendClaude'),
         providerId: row.id,
+        providerName: getClaudeProfileLabel(row.id),
         models,
         page,
         current: findRunningClaudeAlias(rung, row.id, models),

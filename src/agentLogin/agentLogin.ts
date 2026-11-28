@@ -9,6 +9,7 @@ import type { SessionKey } from '../sessionKey';
 import { keyToString } from '../sessionKey';
 import { getOpenCodeChildEnv } from '../installManager';
 import { t } from '../i18n';
+import { getClaudeProfileLabel } from '../utils/claudeProfileLabels';
 import { type IPty, spawn as spawnPty } from 'node-pty';
 import { resolveClaudeBinary, resolveOpenCodeBinary } from '../utils/resolveBinary';
 import {
@@ -206,7 +207,7 @@ export interface AgentLoginPorts {
  * subscription and Console sign-ins here and the pasted API key (`claudeAccounts.ts`) all end in it.
  */
 export function appendLimitsListNote(text: string, profileName: string, isMissingFromLimitsList: boolean): string {
-  return isMissingFromLimitsList ? `${text}\n${t('account.limitsListHint', { name: profileName })}` : text;
+  return isMissingFromLimitsList ? `${text}\n${t('account.limitsListHint', { name: getClaudeProfileLabel(profileName) })}` : text;
 }
 
 /**
@@ -317,7 +318,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
           current.urlRelayed = true;
           clearTimeout(current.timeoutTimer);
           const linkText = current.profile
-            ? t(current.profile.billing === 'api' ? 'account.login_url_api' : 'account.login_url', { name: current.profile.name, url })
+            ? t(current.profile.billing === 'api' ? 'account.login_url_api' : 'account.login_url', { name: getClaudeProfileLabel(current.profile.name), url })
             : t('agent.login_url', { url });
           void replyToThread(key, appendEscToCancelHint(linkText));
         }
@@ -418,7 +419,7 @@ export function createAgentLogin(ports: AgentLoginPorts) {
       await onClaudeProfileAuthStatus?.(key, pending.profile, status);
       // The `default` profile IS the `~/.claude` login: a success retires the pinned logged-out notice, as `/login` does.
       if (isSucceeded && pending.profile.configDir === null) clearAuthNotice(key);
-      await replyToThread(key, isSucceeded ? formatProfileLoginSuccess(pending.profile, status) : t('account.login_failed', { name: pending.profile.name }));
+      await replyToThread(key, isSucceeded ? formatProfileLoginSuccess(pending.profile, status) : t('account.login_failed', { name: getClaudeProfileLabel(pending.profile.name) }));
       return;
     }
     if (isSucceeded) {
@@ -435,8 +436,8 @@ export function createAgentLogin(ports: AgentLoginPorts) {
    */
   function formatProfileLoginSuccess(profile: ClaudeLoginProfile, status: ClaudeAuthStatus | null): string {
     const confirmation = status?.billing === 'api'
-      ? t('account.login_success_api', { name: profile.name, email: status.email ?? '?', org: status.orgName ?? '?' })
-      : t('account.login_success', { name: profile.name, email: status?.email ?? '?', plan: status?.subscriptionType ?? '?' });
+      ? t('account.login_success_api', { name: getClaudeProfileLabel(profile.name), email: status.email ?? '?', org: status.orgName ?? '?' })
+      : t('account.login_success', { name: getClaudeProfileLabel(profile.name), email: status?.email ?? '?', plan: status?.subscriptionType ?? '?' });
     return appendLimitsListNote(confirmation, profile.name, checkIsProfileMissingFromLimitsList?.(profile.name) === true);
   }
 

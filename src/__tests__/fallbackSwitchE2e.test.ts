@@ -115,6 +115,8 @@ const secondTurnText = 'Working on SLOW-2.';
 const firstTurnText = 'Working on SLOW-1.';
 /** The account the second one takes over from, and the one the chain names. */
 const exhaustedAccount = 'default';
+/** How the screens and notices name it: `~/.claude` is «Main» until renamed (its id stays `default`). */
+const exhaustedAccountName = 'Main';
 const takeoverAccount = 'work';
 /** The third account of the last step: the soonest weekly reset, the least headroom. */
 const soonestResetAccount = 'spare';
@@ -262,7 +264,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     assert.deepEqual(general.getKeyboardLabels(setup).slice(-2), [['🔁 Auto switch: ON'], ['⏳ Wait for reset: ON']], 'ON by default, with one account and no chain');
     const board = await openBoard(general, generalTopicThreadId);
     assert.match(board.message.text, /Defaults for all topics: 🔁 Auto switch: ON · ⏳ Wait for reset: ON — \/limits_autoswitch/);
-    assert.deepEqual(general.getKeyboardLabels(board.message).flat(), ['✓ Claude · default', '🔔 Reminders: every 1 h'], 'a single signed-in account, then the reminders row');
+    assert.deepEqual(general.getKeyboardLabels(board.message).flat(), ['✓ Claude · Main', '🔔 Reminders: every 1 h'], 'a single signed-in account, then the reminders row');
     assert.equal(readPersistedState(getLayout()).claudeAutoSwitchOnLimitEnabled, undefined, 'nobody chose it: ON is the default, not a stored value');
     // «Stream + answers»: each message opens a request, whose prompt is what the bot hands the agent again after the switch.
     await firstTopic.sendAndAwaitReply(`/bind ${firstFolder}`, `Bound to \`${firstFolder}\``);
@@ -295,7 +297,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     const notice = await firstTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
     assert.equal(
       notice.text,
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}». The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
+      `🔁 Account «${exhaustedAccountName}» hit its usage limit — this topic continues on «${takeoverAccount}». The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
     );
 
     await getCharness().waitFor('the conversation to continue under the second account and answer', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-1').length === 2);
@@ -322,21 +324,21 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     const board = await openBoard(firstTopic, firstTopicThreadId);
     // The model after the account is the one the live process reports on its init frame, which may or may not have been read yet.
     assert.equal(board.rowLabel(takeoverAccount), `✓ Claude · ${takeoverAccount}`, 'the topic runs on the account it continued on; the button is the name only, no model');
-    assert.equal(board.rowLabel(exhaustedAccount), 'Claude · default', 'no reset on the exhausted account\'s button');
+    assert.equal(board.rowLabel(exhaustedAccountName), 'Claude · Main', 'no reset on the exhausted account\'s button');
     assert.match(
       board.message.text,
-      /^Usage \(% used\)\ndefault — ⛔ at its limit until [A-Z][a-z]{2} 01:00\n\n🔁 Auto switch: ON \(as in General\) · ⏳ Wait for reset: ON \(as in General\) — \/limits_autoswitch\n\nChoose the active model:$/,
+      /^Usage \(% used\)\nMain — ⛔ at its limit until [A-Z][a-z]{2} 01:00\n\n🔁 Auto switch: ON \(as in General\) · ⏳ Wait for reset: ON \(as in General\) — \/limits_autoswitch\n\nChoose the active model:$/,
       'the exhausted account\'s reset is in the message\'s usage block',
     );
     const launchesBefore = getSessionLaunches(getLayout()).length;
-    const toast = await firstTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccount));
-    assert.match(toast, new RegExp(`Claude account for this topic: ${exhaustedAccount}`));
+    const toast = await firstTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccountName));
+    assert.match(toast, new RegExp(`Claude account for this topic: ${exhaustedAccountName}`));
     await waitForSessionRespawn(getCharness(), getLayout(), 'the session to be re-spawned under the first account', null, firstSessionId, launchesBefore);
     assert.equal(listSwitchNotices(firstTopic).length, 1, 'switching back by hand posts no limit notice');
     // The agent was still answering when the pick came in: the switch applies when its turn ends, and the board
     // shows where the topic REALLY runs — so the ✓ is checked on a board opened after the session restarted.
     const after = await openBoard(firstTopic, firstTopicThreadId);
-    assert.match(after.rowLabel(exhaustedAccount), /^✓ Claude · default/, 'the topic runs on the first account again');
+    assert.match(after.rowLabel(exhaustedAccountName), /^✓ Claude · Main/, 'the topic runs on the first account again');
     assert.equal(after.rowLabel(takeoverAccount), `Claude · ${takeoverAccount}`);
     assert.equal(readPersistedState(getLayout()).claudeProfileOverrides?.[`${group.id}:${firstTopicThreadId}`], exhaustedAccount, 'the pick is the topic\'s own');
   });
@@ -352,7 +354,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     await getCharness().waitFor('the second switch notice', agentStartTimeoutMs, () => listSwitchNotices(firstTopic).length === 2);
     assert.equal(
       listSwitchNotices(firstTopic)[1].text,
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}». The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
+      `🔁 Account «${exhaustedAccountName}» hit its usage limit — this topic continues on «${takeoverAccount}». The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
     );
     await getCharness().waitFor('the conversation to continue under the second account', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-3').length === 2);
     assert.equal(getLaunchOfTurn(getLayout(), 'LIM-3', 1).claudeConfigDir, getAccountConfigDir(getLayout(), takeoverAccount));
@@ -370,7 +372,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     const notice = await secondTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
     assert.equal(
       notice.text,
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${takeoverAccount}» (sonnet). The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
+      `🔁 Account «${exhaustedAccountName}» hit its usage limit — this topic continues on «${takeoverAccount}» (sonnet). The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
     );
 
     // The wake-up engine may remind the silent turn in the process the account switch started, before the model pin
@@ -398,8 +400,8 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     const board = await openBoard(fourthTopic, fourthTopicThreadId);
     const rows = fourthTopic.getKeyboardLabels(board.message).flat();
     assert.equal(rows.length, 4, 'both signed-in accounts, the reminders row, then «skip once» (a limit wait is armed)');
-    assert.equal(board.rowLabel(exhaustedAccount), '✓ Claude · default');
-    assert.match(board.message.text, /^Usage \(% used\)\ndefault — ⛔ at its limit until [A-Z][a-z]{2} 01:00\n\n/, 'the limit is in the message, not on the button');
+    assert.equal(board.rowLabel(exhaustedAccountName), '✓ Claude · Main');
+    assert.match(board.message.text, /^Usage \(% used\)\nMain — ⛔ at its limit until [A-Z][a-z]{2} 01:00\n\n/, 'the limit is in the message, not on the button');
     assert.equal(board.rowLabel(takeoverAccount), `Claude · ${takeoverAccount}`);
     assert.equal(rows.at(-1), '⏭ Skip once');
     const skipData = fourthTopic.getKeyboardData(board.message).flat().at(-1) ?? '';
@@ -410,8 +412,8 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
   it('the ✓ row opens the model page of the account the topic runs on: a pick restarts the session on that model and does not turn "follows General" into an account pick of its own', async () => {
     const launchesBefore = getSessionLaunches(getLayout()).length;
     const board = await openBoard(fourthTopic, fourthTopicThreadId);
-    await fourthTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccount));
-    await fourthTopic.waitForMessageText('the model page', board.message, (text) => text === `Claude · ${exhaustedAccount} — pick the model for this topic:`);
+    await fourthTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccountName));
+    await fourthTopic.waitForMessageText('the model page', board.message, (text) => text === `Claude · ${exhaustedAccountName} — pick the model for this topic:`);
     const labels = fourthTopic.getKeyboardLabels(board.message).flat();
     assert.deepEqual(labels.map((label) => label.replace(' ✓', '')), ['fable', 'opus', 'sonnet', 'haiku', '⬅️ Back']);
     const sonnetData = fourthTopic.getKeyboardData(board.message).flat()[labels.findIndex((label) => label.startsWith('sonnet'))];
@@ -421,10 +423,10 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
       return getSessionLaunches(getLayout()).length > launchesBefore && latest !== undefined && getFlagValues(latest.argv, '--model').includes('sonnet');
     });
     assert.equal(readPersistedState(getLayout()).claudeProfileOverrides?.[`${group.id}:${fourthTopicThreadId}`], undefined, 'the topic still follows General\'s account');
-    await getCharness().waitFor('the board to come back', replyTimeoutMs, () => board.message.text.endsWith('Choose the active model:') && fourthTopic.getKeyboardLabels(board.message).flat().includes(`✓ Claude · ${exhaustedAccount}`));
+    await getCharness().waitFor('the board to come back', replyTimeoutMs, () => board.message.text.endsWith('Choose the active model:') && fourthTopic.getKeyboardLabels(board.message).flat().includes(`✓ Claude · ${exhaustedAccountName}`));
     // The model is no longer on the button: the page the ✓ row opens marks the one the session runs.
-    await fourthTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccount));
-    await fourthTopic.waitForMessageText('the model page again', board.message, (text) => text === `Claude · ${exhaustedAccount} — pick the model for this topic:`);
+    await fourthTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccountName));
+    await fourthTopic.waitForMessageText('the model page again', board.message, (text) => text === `Claude · ${exhaustedAccountName} — pick the model for this topic:`);
     await getCharness().waitFor('sonnet to carry the ✓ on the page', replyTimeoutMs, () => fourthTopic.getKeyboardLabels(board.message).flat().includes('sonnet ✓'));
     await fourthTopic.tapAndAwaitAnswer(board.message, fourthTopic.getKeyboardData(board.message).flat().at(-1) ?? '');
   });
@@ -457,11 +459,11 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
 
     // Inside the limit: Fable. The model changes, the wait stays, nothing is resumed.
     let board = await openBoard(fourthTopic, fourthTopicThreadId);
-    await fourthTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccount));
-    await fourthTopic.waitForMessageText('the model page', board.message, (text) => text === `Claude · ${exhaustedAccount} — pick the model for this topic:`);
+    await fourthTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccountName));
+    await fourthTopic.waitForMessageText('the model page', board.message, (text) => text === `Claude · ${exhaustedAccountName} — pick the model for this topic:`);
     const launchesBeforeFable = getSessionLaunches(getLayout()).length;
     const fableToast = await fourthTopic.tapAndAwaitAnswer(board.message, fourthTopic.getKeyboardData(board.message).flat()[0]);
-    assert.equal(fableToast, `✅ This topic runs on Claude «${exhaustedAccount}» (fable).`);
+    assert.equal(fableToast, `✅ This topic runs on Claude «${exhaustedAccountName}» (fable).`);
     await getCharness().waitFor('the session to restart on fable', agentStartTimeoutMs, () => {
       const latest = getSessionLaunches(getLayout()).at(-1);
       return getSessionLaunches(getLayout()).length > launchesBeforeFable && latest !== undefined && getFlagValues(latest.argv, '--model').includes('fable');
@@ -472,15 +474,15 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
 
     // Beyond the limit: opus. The work continues on it at once.
     board = await openBoard(fourthTopic, fourthTopicThreadId);
-    await fourthTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccount));
-    await fourthTopic.waitForMessageText('the model page', board.message, (text) => text === `Claude · ${exhaustedAccount} — pick the model for this topic:`);
+    await fourthTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccountName));
+    await fourthTopic.waitForMessageText('the model page', board.message, (text) => text === `Claude · ${exhaustedAccountName} — pick the model for this topic:`);
     const labels = fourthTopic.getKeyboardLabels(board.message).flat();
     const opusToast = await fourthTopic.tapAndAwaitAnswer(board.message, fourthTopic.getKeyboardData(board.message).flat()[labels.findIndex((label) => label.startsWith('opus'))]);
-    assert.equal(opusToast, `✅ This topic runs on Claude «${exhaustedAccount}» (opus).`);
+    assert.equal(opusToast, `✅ This topic runs on Claude «${exhaustedAccountName}» (opus).`);
     await getCharness().waitFor('the limit move\'s notice', agentStartTimeoutMs, () => listSwitchNotices(fourthTopic).length === noticesBefore + 1);
     assert.match(
       listSwitchNotices(fourthTopic).at(-1)?.text ?? '',
-      new RegExp(`^🔁 Model \\S+ hit its usage limit — this topic continues on «${exhaustedAccount}» \\(opus\\)\\. The limit resets ${getResetClock(resetsAtIso)}\\. Switch: /limits$`),
+      new RegExp(`^🔁 Model \\S+ hit its usage limit — this topic continues on «${exhaustedAccountName}» \\(opus\\)\\. The limit resets ${getResetClock(resetsAtIso)}\\. Switch: /limits$`),
       'the model hit the limit, the account did not change',
     );
     await getCharness().waitFor('the interrupted turn to resume on opus', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-7').length === 2);
@@ -518,12 +520,12 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     const noticesBefore = listSwitchNotices(fourthTopic).length;
 
     const board = await openBoard(fourthTopic, fourthTopicThreadId);
-    await fourthTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccount));
-    await fourthTopic.waitForMessageText('the model page', board.message, (text) => text === `Claude · ${exhaustedAccount} — pick the model for this topic:`);
+    await fourthTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccountName));
+    await fourthTopic.waitForMessageText('the model page', board.message, (text) => text === `Claude · ${exhaustedAccountName} — pick the model for this topic:`);
     const labels = fourthTopic.getKeyboardLabels(board.message).flat();
     const launchesBefore = getSessionLaunches(getLayout()).length;
     const toast = await fourthTopic.tapAndAwaitAnswer(board.message, fourthTopic.getKeyboardData(board.message).flat()[labels.findIndex((label) => label.startsWith('fable'))]);
-    assert.equal(toast, `✅ This topic runs on Claude «${exhaustedAccount}» (fable).`);
+    assert.equal(toast, `✅ This topic runs on Claude «${exhaustedAccountName}» (fable).`);
     await getCharness().waitFor('the session to restart on fable', agentStartTimeoutMs, () => {
       const latest = getSessionLaunches(getLayout()).at(-1);
       return getSessionLaunches(getLayout()).length > launchesBefore && latest !== undefined && getFlagValues(latest.argv, '--model').includes('fable');
@@ -559,11 +561,11 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     assert.match(board.rowLabel(takeoverAccount), /^✓ Claude · work/, 'the topic runs on the second account');
     assert.equal(thirdTopic.getKeyboardLabels(board.message).flat().at(-1), '⏭ Skip once', 'the armed wait offers «skip once»');
     const launchesBefore = getSessionLaunches(getLayout()).length;
-    await thirdTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccount));
+    await thirdTopic.tapAndAwaitAnswer(board.message, board.rowData(exhaustedAccountName));
     await getCharness().waitFor('the limit switch\'s notice', agentStartTimeoutMs, () => listSwitchNotices(thirdTopic).length === 2);
     assert.equal(
       listSwitchNotices(thirdTopic)[1].text,
-      `🔁 Account «${takeoverAccount}» hit its usage limit — this topic continues on «${exhaustedAccount}». The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
+      `🔁 Account «${takeoverAccount}» hit its usage limit — this topic continues on «${exhaustedAccountName}». The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
       'a pick during the wait is the limit switch: the account the topic left did hit its limit',
     );
     await getCharness().waitFor('the interrupted turn to resume on the first account', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-5').length === 2);
@@ -685,7 +687,7 @@ describe('The usage-limit switch notice end to end: built charness, fake Bot API
     const notice = await sixthTopic.waitForMessage('the switch notice', (message) => message.text.startsWith('🔁'));
     assert.equal(
       notice.text,
-      `🔁 Account «${exhaustedAccount}» hit its usage limit — this topic continues on «${soonestResetAccount}». The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
+      `🔁 Account «${exhaustedAccountName}» hit its usage limit — this topic continues on «${soonestResetAccount}». The limit resets ${getResetClock(resetsAtIso)}. Switch: /limits`,
       'the soonest weekly reset wins over the headroom of «work»',
     );
     await getCharness().waitFor('the conversation to continue under the soonest-reset account', agentStartTimeoutMs, () => getAgentTurns(getLayout(), 'LIM-10').length === 2);

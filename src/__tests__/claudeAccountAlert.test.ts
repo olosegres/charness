@@ -29,6 +29,7 @@ import * as path from 'path';
 import { StateStore } from '../state';
 import { localeCodes, runWithLocale, type Locale } from '../i18n';
 import type { ClaudeProfileUsability } from '../utils/claudeAuthRefusal';
+import { setClaudeProfileLabelReader } from '../utils/claudeProfileLabels';
 import {
   claudeAccountAlertDetailMaxChars,
   getClaudeAccountAlertDetail,
@@ -130,11 +131,11 @@ describe('renderClaudeAccountAlert (English)', () => {
   const telegramHow = (name: string): string => `/accounts login ${name}`;
 
   it('what broke, the CLI\'s words, what to do, and where the conversations went', () => {
-    const alert: ClaudeAccountAlert = { lost: [{ name: 'default', usability: 'signedOut', detail: notLoggedIn }], back: [], instead: 'second' };
+    const alert: ClaudeAccountAlert = { lost: [{ name: 'personal', usability: 'signedOut', detail: notLoggedIn }], back: [], instead: 'second' };
     assert.equal(runWithLocale('en', () => renderClaudeAccountAlert(alert, telegramHow)), [
-      '⚠️ Action needed: Claude account «default» is signed out: its sign-in expired or was revoked.',
+      '⚠️ Action needed: Claude account «personal» is signed out: its sign-in expired or was revoked.',
       `The CLI said: ${notLoggedIn}`,
-      'To fix it, sign it in again: /accounts login default',
+      'To fix it, sign it in again: /accounts login personal',
       '',
       'Its conversations continue on «second», and new ones start there.',
     ].join('\n'));
@@ -150,7 +151,26 @@ describe('renderClaudeAccountAlert (English)', () => {
   });
 
   it('usable again: one line', () => {
-    assert.equal(runWithLocale('en', () => renderClaudeAccountAlert({ lost: [], back: ['default'], instead: 'default' }, telegramHow)), '✅ Claude account «default» is signed in again and takes conversations.');
+    assert.equal(runWithLocale('en', () => renderClaudeAccountAlert({ lost: [], back: ['personal'], instead: 'personal' }, telegramHow)), '✅ Claude account «personal» is signed in again and takes conversations.');
+  });
+
+  it('names every account by what the operator calls it — ~/.claude «Main» in the reader\'s language, a renamed one by its name — while the sign-in hint gets the id to word its own way', () => {
+    setClaudeProfileLabelReader((name) => (name === 'work' ? 'Sergei.Solo@work' : undefined));
+    try {
+      const hows: string[] = [];
+      const text = runWithLocale('ru', () => renderClaudeAccountAlert(
+        { lost: [{ name: 'default', usability: 'signedOut', detail: null }], back: ['work'], instead: 'work' },
+        (name) => { hows.push(name); return `/accounts login ${name}`; },
+      ));
+      assert.match(text, /«Основной»/);
+      assert.match(text, /«Sergei\.Solo@work»/);
+      assert.doesNotMatch(text, /«default»|«work»/);
+      assert.deepEqual(hows, ['default'], 'the caller turns the id into its own hint (Telegram: the display name; the host: the folder)');
+      assert.equal(runWithLocale('en', () => renderClaudeAccountSignOutDm('work')).text, '🔑 Claude account «Sergei.Solo@work» is signed out — its sign-in expired. Tap the button to sign it in again.');
+      assert.equal(renderClaudeAccountSignOutDm('work').callbackData, 'acct_signin_work', 'the button keeps the id');
+    } finally {
+      setClaudeProfileLabelReader(() => undefined);
+    }
   });
 });
 
@@ -159,7 +179,7 @@ describe('every locale', () => {
     it(`${locale}: every part names its account and leaves no placeholder`, () => {
       const alert: ClaudeAccountAlert = {
         lost: [
-          { name: 'default', usability: 'signedOut', detail: notLoggedIn },
+          { name: 'personal', usability: 'signedOut', detail: notLoggedIn },
           { name: 'work', usability: 'orgDisabled', detail: null },
           { name: 'third', usability: 'rejected', detail: null },
           { name: 'fourth', usability: 'notSignedIn', detail: null },
@@ -168,8 +188,8 @@ describe('every locale', () => {
         instead: null,
       };
       const text = runWithLocale(locale as Locale, () => renderClaudeAccountAlert(alert, (name) => `/accounts login ${name}`));
-      for (const name of ['default', 'work', 'third', 'fourth', 'fifth']) assert.ok(text.includes(`«${name}»`), `${name} in ${text}`);
-      for (const name of ['default', 'work', 'third', 'fourth']) assert.ok(text.includes(`/accounts login ${name}`), `how to sign ${name} in, in ${text}`);
+      for (const name of ['personal', 'work', 'third', 'fourth', 'fifth']) assert.ok(text.includes(`«${name}»`), `${name} in ${text}`);
+      for (const name of ['personal', 'work', 'third', 'fourth']) assert.ok(text.includes(`/accounts login ${name}`), `how to sign ${name} in, in ${text}`);
       assert.ok(text.includes(notLoggedIn), 'the CLI\'s words as they are');
       assert.ok(!/\{\w+\}/.test(text), `no placeholder left in ${text}`);
       const moved = runWithLocale(locale as Locale, () => renderClaudeAccountAlert({ ...alert, instead: 'second' }, (name) => name));
