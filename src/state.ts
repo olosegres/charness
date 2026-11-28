@@ -270,6 +270,12 @@ export interface AgentData {
 export interface ClaudeProfileRecord {
   /** ISO instant the profile was added. */
   createdAt: string;
+  /**
+   * The account's display name (`utils/claudeProfileLabels.ts`): free text the operator gave at ➕ or with ✏️ «Rename», shown wherever
+   * the account is named; the record's key stays its fixed id. Absent = none of its own: the screens show the id (`default`: «Main»).
+   * On the hidden `default` record too.
+   */
+  label?: string;
   /** From the last `claude auth status --json` read under the profile's directory. */
   loggedIn?: boolean;
   email?: string;
@@ -3105,6 +3111,19 @@ export class StateStore {
     delete record.creditExhaustedAt;
     delete record.creditUnconfirmedSince;
     this.scheduleSave();
+  }
+
+  /**
+   * @description Set (or, with `null`, drop) an account's display name — the record's key, its id, never changes. `default` gets its
+   * hidden record on first write; an unknown added name is refused (`false`). Flushed at once: the operator just typed it.
+   */
+  async setClaudeProfileLabel(name: string, label: string | null): Promise<boolean> {
+    const record = this.touchClaudeProfileInfo(name);
+    if (!record) return false;
+    if (label === null) delete record.label;
+    else record.label = label;
+    await this.flush();
+    return true;
   }
 
   /** The mutable record behind `name`: created for `default`, `null` for an added name that is not registered. */

@@ -1039,6 +1039,7 @@ export const ruDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Достигнут лимит использования — следующая попытка в {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Достигнут лимит использования. Автопродолжение выключено — работа подождёт, пока оператор её не возобновит.',
 
+  'account.mainLabel': 'Основной',
   'account.title': '👤 Этот топик работает на: {current}\n\n{list}',
   'account.titleGeneral': '👤 Аккаунт Claude — по умолчанию для ВСЕХ топиков: {name}\n\n{list}\n\nНажмите профиль, чтобы сделать его значением по умолчанию. Топики со своим выбором сохраняют его.',
   'account.row.loggedOut': 'не выполнен вход',

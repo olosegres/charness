@@ -61,6 +61,22 @@ describe('StateStore: Claude account profiles', () => {
     assert.deepEqual(store.listClaudeProfileOverrideKeys('work').map(keyToString), [keyToString(topicA)]);
   });
 
+  it('a display name is set and dropped under the fixed id, on disk at once; `default` gets its hidden record; an unknown added name is refused', async () => {
+    assert.equal(await store.setClaudeProfileLabel('work', 'Sergei.Solo@work'), true);
+    assert.equal(store.getClaudeProfileRecord('work')?.label, 'Sergei.Solo@work');
+    assert.equal(store.getClaudeProfileRecord('work')?.email, 'work@example.com', 'the rest of the record stays');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')).claudeProfiles.work.label, 'Sergei.Solo@work');
+    assert.equal(await store.setClaudeProfileLabel('default', 'Personal'), true);
+    assert.equal(store.getClaudeProfileInfo('default')?.label, 'Personal');
+    assert.equal(store.getClaudeProfileRecord('default'), undefined, '`default` stays out of the added profiles');
+    assert.equal(await store.setClaudeProfileLabel('ghost', 'Ghost'), false);
+    assert.equal(store.getClaudeProfileInfo('ghost'), undefined);
+    await store.setClaudeProfileLabel('work', null);
+    await store.setClaudeProfileLabel('default', null);
+    assert.equal(store.getClaudeProfileRecord('work')?.label, undefined);
+    assert.equal('label' in (JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')).claudeProfiles.default ?? {}), false);
+  });
+
   it('clearing a pick returns the topic to the instance default', async () => {
     await store.setClaudeProfileOverride(topicB, null);
     assert.equal(store.getClaudeProfileOverride(topicB), undefined);

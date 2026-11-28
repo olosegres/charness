@@ -1986,7 +1986,9 @@ function registerClaudeProfilesTool(server: ToolRegistrar, deps: SchedulerMcpDep
         'session you resume). A NEW agent (omit `currentProfile`) goes to an `api`-billed account of the list first while its ' +
         'credit lasts (a Claude Console balance, no windows), then to the usable subscription whose weekly limit resets ' +
         'SOONEST — what burns soonest is spent first; an account whose five-hour window is at 90 % or more is skipped until ' +
-        'it resets. Take the account of `recommended` — on a resume, of `resume.profile` (below); no need to ask the operator. Calling it IS looking at the limits: ' +
+        'it resets. Take the account of `recommended` — on a resume, of `resume.profile` (below); no need to ask the operator. A profile\'s `name` is ' +
+        'its fixed id — record it and pass it back as `currentProfile`; its `label` is what the operator calls the account in /accounts — ' +
+        'use that word when you tell the user about it. Calling it IS looking at the limits: ' +
         'the bot\'s `[Accounts …]` reminders then wait another interval. A worker you RESUME: pass `currentProfile` (the profile it last ran on) ' +
         'and `lastRunEndedAt` (when its last run ended — the last write of its log; omitted = cold). The answer then carries ' +
         '`resume`: `resume` → continue the session under `resume.profile`; `handOver` → do NOT resume that worker on another ' +

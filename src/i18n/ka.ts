@@ -1035,6 +1035,7 @@ export const kaDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 გამოყენების ლიმიტი ამოიწურა — შემდეგი მცდელობა {time}-ზე.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 გამოყენების ლიმიტი ამოიწურა. ავტომატური გაგრძელება გამორთულია, ამიტომ სამუშაო დაელოდება, სანამ ოპერატორი არ განაახლებს მას.',
 
+  'account.mainLabel': 'მთავარი',
   'account.title': '👤 ეს თემა მუშაობს: {current}\n\n{list}',
   'account.titleGeneral': '👤 Claude ანგარიში — ნაგულისხმევი ყველა თემისთვის: {name}\n\n{list}\n\nშეეხეთ პროფილს, რომ ის ნაგულისხმევი გახდეს. საკუთარი არჩევანის მქონე თემები მას ინარჩუნებენ.',
   'account.row.loggedOut': 'არ არის შესული',

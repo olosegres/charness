@@ -85,8 +85,8 @@ kill -0 <pid> 2>/dev/null || { echo "worker <pid> exited"; exit 1; }; [ -n "$(fi
   profile name recorded at launch) and `lastRunEndedAt` (the last write of its log, an ISO instant) — and start the worker with
   `CLAUDE_CONFIG_DIR=<configDir>` of `recommended`, on a resume of `resume.profile` (nothing when the `configDir` is null; without
   it the worker drains YOUR account). Take it without asking: it follows the operator's /limits auto-switch list — an API-credit account first, then the
-  soonest weekly reset, so what expires first is spent first. Never reuse an earlier answer. Record the profile name beside the
-  worker's session id.
+  soonest weekly reset, so what expires first is spent first. Never reuse an earlier answer. Record the profile `name` (its fixed
+  id) beside the worker's session id; its `label` is what the operator calls the account — use it when you tell the user.
 - `worker.cli: opencode` and `worker.unavailable` null → no account to take: `recommended`, `resume` and `nextAvailable` do not
   apply — launch it with `charness-delegate-opencode`.
 - `worker.unavailable` set → the worker runs on this conversation's CLI and model: on Claude, call `claude_profiles` again with that

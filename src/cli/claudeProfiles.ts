@@ -144,7 +144,10 @@ function formatApiCreditParts(entry: ClaudeProfileReportEntry): string {
   return parts.map((part) => `  ${part}`).join('');
 }
 
-/** One human line (`✓` marks the account the next process goes to): `✓ work  /data/…/work  mail@example.com personal max  5h 12% 🔄 in 2h · week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h` (no Fable part for an account without that window; an account billed to API credits says so and has no windows). */
+/**
+ * One human line (`✓` marks the account the next process goes to): `✓ work «Work (team)»  /data/…/work  mail@example.com personal max  5h 12% 🔄 in 2h · week 40% 🔄 in 2d 1h · Fable 3% 🔄 in 2d 1h`
+ * — the id, then the display name when it differs (no Fable part for an account without that window; an account billed to API credits says so and has no windows).
+ */
 export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowMs: number, pickedName?: string): string {
   const find = (kind: ClaudeUsageBucketKind) => entry.buckets.find((bucket) => bucket.kind === kind) ?? null;
   const weeklyBucket = find('weekly_all');
@@ -172,7 +175,8 @@ export function formatClaudeProfileCliLine(entry: ClaudeProfileReportEntry, nowM
   const usage = isApi ? `no windows${formatApiCreditParts(entry)}` : formatWindows();
   const limited = entry.limitedUntil && Date.parse(entry.limitedUntil) > nowMs ? `  LIMITED until ${entry.limitedUntil}` : '';
   const notOffered = entry.chainExclusion === null ? '' : `  NOT OFFERED: ${claudeChainExclusionWords[entry.chainExclusion]}`;
-  return `${marker} ${entry.name}  ${entry.configDir ?? '(default: no CLAUDE_CONFIG_DIR)'}  ${account}  ${usage}${limited}${notOffered}`;
+  const label = entry.label === entry.name ? '' : ` «${entry.label}»`;
+  return `${marker} ${entry.name}${label}  ${entry.configDir ?? '(default: no CLAUDE_CONFIG_DIR)'}  ${account}  ${usage}${limited}${notOffered}`;
 }
 
 /**

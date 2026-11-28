@@ -1034,6 +1034,7 @@ export const hiDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 उपयोग सीमा पूरी हो गई — अगला प्रयास {time} पर।',
   'requests.limit.answerAutoResumeOffNotice': '🚧 उपयोग सीमा पूरी हो गई। स्वचालित पुनरारंभ बंद है, इसलिए काम तब तक रुका रहेगा जब तक ऑपरेटर इसे फिर से शुरू नहीं करता।',
 
+  'account.mainLabel': 'मुख्य',
   'account.title': '👤 यह टॉपिक इस पर चल रहा है: {current}\n\n{list}',
   'account.titleGeneral': '👤 Claude खाता — सभी टॉपिक के लिए डिफ़ॉल्ट: {name}\n\n{list}\n\nकिसी प्रोफ़ाइल पर टैप करके उसे डिफ़ॉल्ट बनाएँ। अपना चुनाव रखने वाले टॉपिक उसे बनाए रखते हैं।',
   'account.row.loggedOut': 'साइन इन नहीं',

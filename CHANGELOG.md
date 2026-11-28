@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+**`claude_profiles` and `charness claude-profiles` now say what you call each Claude account (`label`) next to its fixed id (`name`), so an agent names the account in your words.**
+`label` is the account's display name; the account in `~/.claude` is «Main» until renamed, and an account without a display name shows its id. Agents keep recording and passing back `name`. The command line prints the display name as `«label»` after the id.
+
 ## 4.3.1 — 2026-11-26
 
 **A Jira issue whose Claude account hit its usage limit while every other account was limited too now continues as soon as the FIRST of them is free again: before, it waited for its own account's reset, an hour or more after another account had freed up.**

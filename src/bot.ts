@@ -356,6 +356,7 @@ import { createBotSkillsSettingsReader, createInstanceDefaultEffortReader, creat
 import { readTaskAgentLimit, type TaskAgentLimitSources } from './trackers/taskAgentLimit';
 import { TaskAgentSlots } from './trackers/taskAgentSlots';
 import { checkIsBotSkillsEnabled, createBotSkillsReader, readBotSkillsInstanceValue, setBotSkillsReader, type BotSkillsSources } from './utils/botSkills';
+import { setClaudeProfileLabelReader } from './utils/claudeProfileLabels';
 import { quietPeriodMs } from './selfUpdate/constants';
 import { getLaunchEnvironment } from './selfUpdate/launchEnvironment';
 import { createDefaultReexecDeps, reexecProcess } from './selfUpdate/restart';
@@ -17120,6 +17121,8 @@ export async function startBot(): Promise<void> {
   registerClaudeConfigDirReader(resolveThreadClaudeConfigDir);
   // The «Bot skills» switch (`/bot_skills`): every agent start, the OpenCode server's start and the bot MCP's instructions read it.
   setBotSkillsReader(botSkillsReader);
+  // Every screen that names a Claude account shows its display name (`/accounts` ✏️), read live off the registry.
+  setClaudeProfileLabelReader((name) => state.getClaudeProfileInfo(name)?.label);
   // The flags the CLI's and OpenCode's own compactions read for `/compact_self_review` follow the saved settings from the start.
   syncAllCompactSelfReviewFlags();
   registerClaudeRateLimitSink(onClaudeRateLimitEvent);

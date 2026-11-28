@@ -1035,6 +1035,7 @@ export const esDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Se alcanzó el límite de uso — próximo intento a las {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Se alcanzó el límite de uso. La reanudación automática está desactivada, así que el trabajo espera hasta que el operador lo reanude.',
 
+  'account.mainLabel': 'Principal',
   'account.title': '👤 Este tema funciona en: {current}\n\n{list}',
   'account.titleGeneral': '👤 Cuenta de Claude — predeterminada para TODOS los temas: {name}\n\n{list}\n\nToca un perfil para hacerlo predeterminado. Los temas con elección propia la conservan.',
   'account.row.loggedOut': 'sin iniciar sesión',

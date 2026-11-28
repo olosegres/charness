@@ -1,0 +1,205 @@
+/**
+ * @description The display names of Claude accounts (`utils/claudeProfileLabels.ts`), the pure rules behind ➕ and ✏️ in `/accounts`:
+ * how a typed name is kept, why one is refused (empty, too long, another account's name or id), the id a new account gets from it
+ * (slug, transliteration, a number on a clash), how a typed command finds an account by either, how a button shortens a long name, the
+ * reason a typed id is refused, and the resolver every screen calls (display name, «Main» for `default`, else the id).
+ * The ✏️ / ➕ capture over the real command module: `claudeAccounts.test.ts` › «✏️ Rename».
+ */
+
+/** Test case: N/A — Charness has no Jira tracker. */
+
+import { afterEach, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { runWithLocale } from '../i18n';
+import { checkIsValidClaudeProfileName, claudeProfileNameMaxLength } from '../utils/claudeProfiles';
+import {
+  buildClaudeProfileNameEntry,
+  checkClaudeProfileLabel,
+  claudeProfileLabelMaxLength,
+  deriveClaudeProfileId,
+  describeClaudeProfileIdProblem,
+  findClaudeProfileByTypedName,
+  getClaudeProfileLabel,
+  normaliseClaudeProfileLabel,
+  resolveClaudeProfileLabel,
+  setClaudeProfileLabelReader,
+  shortenClaudeProfileLabel,
+  type ClaudeProfileNameEntry,
+} from '../utils/claudeProfileLabels';
+
+const accounts: ClaudeProfileNameEntry[] = [
+  { name: 'default', labels: ['Main'] },
+  { name: 'work', labels: ['Sergei.Solo@work'] },
+  { name: 'ada', labels: ['ada'] },
+];
+
+describe('claudeProfileLabels: normaliseClaudeProfileLabel', () => {
+  it('keeps capitals, dots, @, Cyrillic and emoji; trims and folds every whitespace run (a line break too) into one space', () => {
+    assert.equal(normaliseClaudeProfileLabel('  Sergei.Solo@work  '), 'Sergei.Solo@work');
+    assert.equal(normaliseClaudeProfileLabel('Работа\n\t 🚀'), 'Работа 🚀');
+  });
+
+  it('drops invisible characters (zero-width space, bidi override, controls) but keeps the joiner of an emoji sequence', () => {
+    assert.equal(normaliseClaudeProfileLabel('wo​rk‮\u0007'), 'work');
+    assert.equal(normaliseClaudeProfileLabel('👩‍💻 dev'), '👩‍💻 dev');
+  });
+
+  it('composes Unicode, so a decomposed «é» is the same name as a composed one', () => {
+    assert.equal(normaliseClaudeProfileLabel('Café'), 'Café');
+  });
+});
+
+describe('claudeProfileLabels: checkClaudeProfileLabel', () => {
+  it('accepts anything up to the cap that no other account is called', () => {
+    assert.equal(checkClaudeProfileLabel({ label: 'Работа 🚀', selfName: null, accounts }), null);
+    assert.equal(checkClaudeProfileLabel({ label: 'x'.repeat(claudeProfileLabelMaxLength), selfName: null, accounts }), null);
+  });
+
+  it('counts characters, not UTF-16 units: forty emoji fit, forty-one do not', () => {
+    assert.equal(checkClaudeProfileLabel({ label: '🚀'.repeat(claudeProfileLabelMaxLength), selfName: null, accounts }), null);
+    assert.deepEqual(checkClaudeProfileLabel({ label: '🚀'.repeat(claudeProfileLabelMaxLength + 1), selfName: null, accounts }), { kind: 'tooLong', max: claudeProfileLabelMaxLength });
+  });
+
+  it('refuses an empty name', () => {
+    assert.deepEqual(checkClaudeProfileLabel({ label: '', selfName: null, accounts }), { kind: 'empty' });
+  });
+
+  it('refuses another account\'s display name, case ignored, naming that account as it is shown', () => {
+    assert.deepEqual(checkClaudeProfileLabel({ label: 'sergei.solo@WORK', selfName: null, accounts }), { kind: 'taken', label: 'Sergei.Solo@work' });
+    assert.deepEqual(checkClaudeProfileLabel({ label: 'MAIN', selfName: 'work', accounts }), { kind: 'taken', label: 'Main' });
+  });
+
+  it('refuses another account\'s id, case ignored — `default` included — so a typed command can never mean two accounts', () => {
+    assert.deepEqual(checkClaudeProfileLabel({ label: 'Work', selfName: 'ada', accounts }), { kind: 'isId', label: 'Sergei.Solo@work' });
+    assert.deepEqual(checkClaudeProfileLabel({ label: 'Default', selfName: 'work', accounts }), { kind: 'isId', label: 'Main' });
+  });
+
+  it('lets an account keep its own name or go back to its id', () => {
+    assert.equal(checkClaudeProfileLabel({ label: 'sergei.solo@work', selfName: 'work', accounts }), null);
+    assert.equal(checkClaudeProfileLabel({ label: 'work', selfName: 'work', accounts }), null);
+  });
+
+  it('refuses the English «Main» while `default` shows a localised one (its entry answers to both)', () => {
+    const russianDefault = runWithLocale('ru', () => buildClaudeProfileNameEntry('default', undefined, 'Main'));
+    assert.deepEqual(russianDefault, { name: 'default', labels: ['Основной', 'Main'] });
+    assert.deepEqual(checkClaudeProfileLabel({ label: 'main', selfName: null, accounts: [russianDefault, ...accounts.slice(1)] }), { kind: 'taken', label: 'Основной' });
+    assert.deepEqual(buildClaudeProfileNameEntry('default', undefined, 'Main'), { name: 'default', labels: ['Main'] }, 'in English the two are one');
+    assert.deepEqual(buildClaudeProfileNameEntry('default', 'Personal', 'Main'), { name: 'default', labels: ['Personal'] }, 'renamed: «Main» is free again');
+  });
+});
+
+describe('claudeProfileLabels: deriveClaudeProfileId', () => {
+  const isFree = (): boolean => false;
+
+  it('makes a lowercase slug of the display name: dots, @ and spaces become one dash, accents are dropped', () => {
+    assert.equal(deriveClaudeProfileId('Sergei.Solo@work', isFree), 'sergei-solo-work');
+    assert.equal(deriveClaudeProfileId('  Café  Crème ', isFree), 'cafe-creme');
+    assert.equal(deriveClaudeProfileId('Straße', isFree), 'strasse');
+  });
+
+  it('transliterates Cyrillic before accents are dropped (й stays y, ё stays e)', () => {
+    assert.equal(deriveClaudeProfileId('Работа', isFree), 'rabota');
+    assert.equal(deriveClaudeProfileId('Мой ёжик', isFree), 'moy-ezhik');
+    assert.equal(deriveClaudeProfileId('Їжак', isFree), 'yizhak');
+  });
+
+  it('falls back to `account` when nothing of the name survives', () => {
+    assert.equal(deriveClaudeProfileId('🚀🚀', isFree), 'account');
+    assert.equal(deriveClaudeProfileId('_-_', isFree), 'account');
+  });
+
+  it('adds a number on a clash (a known id, `default`, a name, a folder — whatever `isTaken` says)', () => {
+    const taken = new Set(['work', 'work-2', 'default', 'account']);
+    assert.equal(deriveClaudeProfileId('Work', (id) => taken.has(id)), 'work-3');
+    assert.equal(deriveClaudeProfileId('default', (id) => taken.has(id)), 'default-2');
+    assert.equal(deriveClaudeProfileId('🙂', (id) => taken.has(id)), 'account-2');
+  });
+
+  it('never refuses `default` by itself: the gate does (`default` is no valid new id)', () => {
+    assert.equal(deriveClaudeProfileId('Default', isFree), 'default-2');
+  });
+
+  it('cuts a long name to the id cap, with the number still fitting and no dash left at the cut', () => {
+    const label = `${'a'.repeat(30)} bcdef`;
+    const id = deriveClaudeProfileId(label, isFree);
+    assert.equal(id, 'a'.repeat(30) + '-b');
+    assert.equal(id.length, claudeProfileNameMaxLength);
+    const clashed = deriveClaudeProfileId(label, (candidate) => candidate === id);
+    assert.equal(clashed, `${'a'.repeat(30)}-2`);
+    assert.ok(checkIsValidClaudeProfileName(clashed));
+  });
+
+  it('always gives a valid id', () => {
+    for (const label of ['A', '9 lives', '-lead', '__x__', 'Ünïcödé', 'Сергей.Соло@работа', '日本語', 'x'.repeat(80)]) {
+      assert.ok(checkIsValidClaudeProfileName(deriveClaudeProfileId(label, isFree)), label);
+    }
+  });
+});
+
+describe('claudeProfileLabels: findClaudeProfileByTypedName', () => {
+  it('finds an account by its id or its display name, case and spacing ignored', () => {
+    assert.equal(findClaudeProfileByTypedName('WORK', accounts), 'work');
+    assert.equal(findClaudeProfileByTypedName(' sergei.solo@work ', accounts), 'work');
+    assert.equal(findClaudeProfileByTypedName('main', accounts), 'default');
+    assert.equal(findClaudeProfileByTypedName('default', accounts), 'default');
+  });
+
+  it('an id wins over a display name (an older state may hold one that equals another id)', () => {
+    assert.equal(findClaudeProfileByTypedName('ada', [{ name: 'other', labels: ['ada'] }, { name: 'ada', labels: ['Ada'] }]), 'ada');
+  });
+
+  it('`null` for an empty or unknown name', () => {
+    assert.equal(findClaudeProfileByTypedName('  ', accounts), null);
+    assert.equal(findClaudeProfileByTypedName('nobody', accounts), null);
+  });
+});
+
+describe('claudeProfileLabels: shortenClaudeProfileLabel', () => {
+  it('keeps a name that fits and cuts a longer one with an ellipsis, between characters', () => {
+    assert.equal(shortenClaudeProfileLabel('Work', 24), 'Work');
+    assert.equal(shortenClaudeProfileLabel('x'.repeat(24), 24), 'x'.repeat(24));
+    assert.equal(shortenClaudeProfileLabel('abcdefghij', 5), 'abcd…');
+    assert.equal(shortenClaudeProfileLabel('🚀🚀🚀🚀🚀🚀', 4), '🚀🚀🚀…');
+    assert.equal(shortenClaudeProfileLabel('ab  cdef', 4), 'ab…', 'no space before the ellipsis');
+  });
+});
+
+describe('claudeProfileLabels: describeClaudeProfileIdProblem', () => {
+  it('names the first character an id cannot hold — never a capital: a typed id is lowercased before', () => {
+    assert.deepEqual(describeClaudeProfileIdProblem('sergei.solo'), { kind: 'character', character: '.' });
+    assert.deepEqual(describeClaudeProfileIdProblem('my work'), { kind: 'character', character: ' ' });
+    assert.deepEqual(describeClaudeProfileIdProblem('работа'), { kind: 'firstCharacter', character: 'р' });
+    assert.deepEqual(describeClaudeProfileIdProblem('_work'), { kind: 'firstCharacter', character: '_' });
+  });
+
+  it('says what else is wrong: empty, reserved, too long; `null` for a good id', () => {
+    assert.deepEqual(describeClaudeProfileIdProblem(''), { kind: 'empty' });
+    assert.deepEqual(describeClaudeProfileIdProblem('default'), { kind: 'reserved' });
+    assert.deepEqual(describeClaudeProfileIdProblem('a'.repeat(claudeProfileNameMaxLength + 1)), { kind: 'tooLong', max: claudeProfileNameMaxLength });
+    assert.equal(describeClaudeProfileIdProblem('work_2-b'), null);
+  });
+});
+
+describe('claudeProfileLabels: what an account is called', () => {
+  afterEach(() => setClaudeProfileLabelReader(() => undefined));
+
+  it('its display name, else «Main» for `default` in the reader\'s language, else its id', () => {
+    assert.equal(resolveClaudeProfileLabel('work', 'Работа'), 'Работа');
+    assert.equal(resolveClaudeProfileLabel('work', undefined), 'work');
+    assert.equal(resolveClaudeProfileLabel('default', undefined), 'Main');
+    assert.equal(runWithLocale('ru', () => resolveClaudeProfileLabel('default', undefined)), 'Основной');
+    assert.equal(resolveClaudeProfileLabel('default', 'Personal'), 'Personal');
+  });
+
+  it('a stored value that is no usable name (a hand edit: blank, not a string) counts as none', () => {
+    assert.equal(resolveClaudeProfileLabel('work', '   '), 'work');
+    assert.equal(resolveClaudeProfileLabel('work', 42), 'work');
+  });
+
+  it('the screens read the registered store, and show ids until one is registered', () => {
+    assert.equal(getClaudeProfileLabel('work'), 'work');
+    setClaudeProfileLabelReader((name) => (name === 'work' ? 'Sergei.Solo@work' : undefined));
+    assert.equal(getClaudeProfileLabel('work'), 'Sergei.Solo@work');
+    assert.equal(getClaudeProfileLabel('default'), 'Main');
+  });
+});

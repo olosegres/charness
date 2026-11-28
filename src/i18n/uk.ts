@@ -1041,6 +1041,7 @@ export const ukDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Досягнуто ліміту використання — наступна спроба о {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Досягнуто ліміту використання. Автопродовження вимкнено — робота чекатиме, доки оператор її не відновить.',
 
+  'account.mainLabel': 'Основний',
   'account.title': '👤 Цей топік працює на: {current}\n\n{list}',
   'account.titleGeneral': '👤 Обліковий запис Claude — типовий для ВСІХ топіків: {name}\n\n{list}\n\nНатисніть профіль, щоб зробити його типовим. Топіки з власним вибором зберігають його.',
   'account.row.loggedOut': 'не виконано вхід',

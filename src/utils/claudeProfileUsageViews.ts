@@ -11,6 +11,7 @@
 import type { ClaudeProfileRecord } from '../state';
 import { checkIsClaudeProfileKnownUnusable, getClaudeProfileSignedIn, type ClaudeAuthRefusal } from './claudeAuthRefusal';
 import { resolveClaudeProfileDir } from './claudeProfiles';
+import { resolveClaudeProfileLabel } from './claudeProfileLabels';
 import { checkIsClaudeApiCreditMarkCurrent, getClaudeApiCreditEstimate, type ClaudeApiCreditAnchor, type ClaudeApiCreditAnchors, type ClaudeApiCreditEstimate } from './claudeApiCredit';
 import { buildClaudeProfilesReport, type ClaudeLaunchChainScope, type ClaudeProfileReportEntry, type ClaudeProfilesReportOptions, type ClaudeProfilesReport, type ClaudeProfileUsageView } from './claudeUsage';
 
@@ -26,6 +27,7 @@ export function buildClaudeProfileUsageView(input: {
   const { name, record, creditAnchor } = input;
   return {
     name,
+    label: resolveClaudeProfileLabel(name, record?.label),
     configDir: resolveClaudeProfileDir(input.dataDir, name),
     // A refusal by the CLI counts as signed out until the account is signed in again (`utils/claudeAuthRefusal.ts`).
     loggedIn: getClaudeProfileSignedIn(record),

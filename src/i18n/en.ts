@@ -1079,6 +1079,7 @@ export const enDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Usage limit reached — next attempt at {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Usage limit reached. Automatic resume is off, so the work waits until the operator resumes it.',
 
+  'account.mainLabel': 'Main',
   'account.title': '👤 This topic runs on: {current}\n\n{list}',
   'account.titleGeneral': '👤 Claude account — default for ALL topics: {name}\n\n{list}\n\nTap a profile to make it the default. Topics with their own pick keep it.',
   'account.row.loggedOut': 'not signed in',

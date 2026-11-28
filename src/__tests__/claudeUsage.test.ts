@@ -930,7 +930,7 @@ describe('the human formats', () => {
 describe('the claude-profiles CLI line', () => {
   it('shows relative resets and the weekly reset in place of an unknown 5h one', () => {
     const entry = {
-      name: 'work', configDir: '/d/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true,
+      name: 'work', label: 'work', configDir: '/d/work', email: 'w@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true,
       buckets: [
         { kind: 'session', percent: 12, resetsAt: null, scopeModel: null },
         { kind: 'weekly_all', percent: 40, resetsAt: new Date(nowMs + 49 * 3_600_000).toISOString(), scopeModel: null },
@@ -948,7 +948,7 @@ describe('the claude-profiles CLI line', () => {
 
   it('a window read at 100 % whose reset has passed prints as a bare 0 % — the line never says «100% 🔄 in 1m»', () => {
     const frozen = {
-      name: 'idle', configDir: '/d/idle', email: 'i@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true,
+      name: 'idle', label: 'idle', configDir: '/d/idle', email: 'i@example.com', kind: 'personal', subscriptionType: 'max', loggedIn: true,
       buckets: [
         { kind: 'session', percent: 100, resetsAt: new Date(nowMs - 60_000).toISOString(), scopeModel: null },
         { kind: 'weekly_all', percent: 100, resetsAt: new Date(nowMs - 3_600_000).toISOString(), scopeModel: null },
@@ -960,7 +960,7 @@ describe('the claude-profiles CLI line', () => {
 
   it('an account the CLI refused says when and why in place of its login, and is not offered', () => {
     const refused = {
-      name: 'work', configDir: '/d/work', email: 'w@example.com', kind: 'corporate', subscriptionType: 'team', loggedIn: false,
+      name: 'work', label: 'work', configDir: '/d/work', email: 'w@example.com', kind: 'corporate', subscriptionType: 'team', loggedIn: false,
       buckets: [], usageFetchedAt: null, isUsageStale: false, limitedUntil: null,
       authRefusal: { at: '2026-11-20T08:00:00.000Z', reason: 'orgDisabled' },
       creditExhaustedAt: null, billing: null, spentUsd: null, remainingEstimateUsd: null, expiresOn: null, probablyUsedUp: false, renewedAt: null, isEligible: false, chainExclusion: null, headroomPercent: null, isRecommended: false,

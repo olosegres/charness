@@ -1029,6 +1029,7 @@ export const jaDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 使用量の上限に達しました — 次の試行は {time} です。',
   'requests.limit.answerAutoResumeOffNotice': '🚧 使用量の上限に達しました。自動再開はオフのため、オペレーターが再開するまで作業は待機します。',
 
+  'account.mainLabel': 'メイン',
   'account.title': '👤 このトピックの実行先: {current}\n\n{list}',
   'account.titleGeneral': '👤 Claude アカウント — 全トピックの既定: {name}\n\n{list}\n\nプロファイルをタップすると既定になります。独自に選択したトピックはそのままです。',
   'account.row.loggedOut': '未ログイン',

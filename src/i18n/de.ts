@@ -1035,6 +1035,7 @@ export const deDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Nutzungslimit erreicht — nächster Versuch um {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Nutzungslimit erreicht. Die automatische Fortsetzung ist aus — die Arbeit wartet, bis der Betreiber sie fortsetzt.',
 
+  'account.mainLabel': 'Hauptkonto',
   'account.title': '👤 Dieses Thema läuft auf: {current}\n\n{list}',
   'account.titleGeneral': '👤 Claude-Konto — Standard für ALLE Themen: {name}\n\n{list}\n\nTippe auf ein Profil, um es zum Standard zu machen. Themen mit eigener Wahl behalten sie.',
   'account.row.loggedOut': 'nicht angemeldet',

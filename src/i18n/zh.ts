@@ -1029,6 +1029,7 @@ export const zhDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 已达到使用限额 — 下次尝试时间为 {time}。',
   'requests.limit.answerAutoResumeOffNotice': '🚧 已达到使用限额。自动恢复已关闭，工作将等待操作员恢复。',
 
+  'account.mainLabel': '主账户',
   'account.title': '👤 此话题运行于：{current}\n\n{list}',
   'account.titleGeneral': '👤 Claude 账号 — 所有话题的默认值：{name}\n\n{list}\n\n点按一个配置将其设为默认。自行选择过的话题保持不变。',
   'account.row.loggedOut': '未登录',

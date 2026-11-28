@@ -1036,6 +1036,7 @@ export const ptDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Limite de uso atingido — próxima tentativa às {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Limite de uso atingido. A retomada automática está desligada, então o trabalho espera até o operador retomá-lo.',
 
+  'account.mainLabel': 'Principal',
   'account.title': '👤 Este tópico corre em: {current}\n\n{list}',
   'account.titleGeneral': '👤 Conta Claude — padrão para TODOS os tópicos: {name}\n\n{list}\n\nToque num perfil para torná-lo o padrão. Tópicos com escolha própria mantêm-na.',
   'account.row.loggedOut': 'sem sessão iniciada',

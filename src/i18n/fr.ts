@@ -1035,6 +1035,7 @@ export const frDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Limite d’utilisation atteinte — prochaine tentative à {time}.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Limite d’utilisation atteinte. La reprise automatique est désactivée : le travail attend que l’opérateur le reprenne.',
 
+  'account.mainLabel': 'Principal',
   'account.title': '👤 Ce sujet tourne sur : {current}\n\n{list}',
   'account.titleGeneral': '👤 Compte Claude — par défaut pour TOUS les sujets : {name}\n\n{list}\n\nTouchez un profil pour en faire la valeur par défaut. Les sujets ayant leur propre choix le gardent.',
   'account.row.loggedOut': 'non connecté',

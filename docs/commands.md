@@ -415,7 +415,11 @@ so one account's usage limit does not stop every topic.
   it stays on the warm account, moved (the account stopped on a limit or can no
   longer run), API credit first, soonest weekly reset, or none usable. The agent then
   starts the child with `CLAUDE_CONFIG_DIR=<configDir>` (`null` = the default
-  profile: set nothing). The bot refreshes the usage figures before it answers, and
+  profile: set nothing). Each profile carries its fixed id as `name` (what an agent
+  records and passes back as `currentProfile`) and, as `label`, what you call it in
+  `/accounts` (its display name; «Main» for `~/.claude` until renamed, the id for an
+  account with no display name) — the word an agent uses when it tells you about the
+  account; `charness claude-profiles` prints it as `«label»` after the id. The bot refreshes the usage figures before it answers, and
   the tool answers within 10 seconds from the last figures instead of hanging: a
   slower refresh goes on in the background, each profile says when its figures
   were read, and a profile whose usage poll was given up on (it ran past 30

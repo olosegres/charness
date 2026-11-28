@@ -1035,6 +1035,7 @@ export const uzDict: Record<string, string> = {
   'requests.limit.answerNextAttemptNotice': '🚧 Foydalanish limitiga yetildi — keyingi urinish {time} da.',
   'requests.limit.answerAutoResumeOffNotice': '🚧 Foydalanish limitiga yetildi. Avtomatik davom ettirish o‘chirilgan, shuning uchun ish operator uni davom ettirguncha kutadi.',
 
+  'account.mainLabel': 'Asosiy',
   'account.title': '👤 Bu mavzu quyidagida ishlayapti: {current}\n\n{list}',
   'account.titleGeneral': '👤 Claude hisobi — BARCHA mavzular uchun standart: {name}\n\n{list}\n\nProfilni standart qilish uchun uni bosing. O‘z tanloviga ega mavzular uni saqlab qoladi.',
   'account.row.loggedOut': 'kirilmagan',

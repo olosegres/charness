@@ -78,6 +78,23 @@ describe('runClaudeProfilesCli', () => {
     assert.deepEqual([subscription?.spentUsd, subscription?.remainingEstimateUsd], [null, null], 'a subscription account has none');
   });
 
+  it('names each account by its fixed id AND what the operator calls it: `label` in --json (its display name, «Main» for `default`, else the id), «label» after the id in the human line', async () => {
+    const stateFile = path.join(dataDir, 'state.json');
+    const persisted = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    persisted.claudeProfiles.work.label = 'Sergei.Solo@work';
+    persisted.claudeProfiles.plain = { createdAt: '2026-10-03T00:00:00.000Z', loggedIn: true };
+    fs.writeFileSync(stateFile, JSON.stringify(persisted));
+    const json: string[] = [];
+    await runClaudeProfilesCli(['--json'], { stdout: (text) => json.push(text) });
+    const report = JSON.parse(json.join('')) as { profiles: Array<{ name: string; label: string }> };
+    assert.deepEqual(report.profiles.map(({ name, label }) => [name, label]), [['default', 'Main'], ['work', 'Sergei.Solo@work'], ['plain', 'plain']]);
+    const human: string[] = [];
+    await runClaudeProfilesCli([], { stdout: (text) => human.push(text) });
+    assert.match(human.join(''), /^. default «Main» {2}\(default: no CLAUDE_CONFIG_DIR\)/m);
+    assert.match(human.join(''), /^. work «Sergei\.Solo@work» {2}\//m);
+    assert.match(human.join(''), /^. plain {2}\//m, 'no display name of its own: the id alone');
+  });
+
   it('--last-run-ended-at: an ISO instant, only with --current; --best prints the NEW worker\'s account on a hand-over and says why on stderr, the resume prints its own and says nothing', async () => {
     const parsed = parseClaudeProfilesCliArgs(['--current', 'work', '--last-run-ended-at', '2026-11-21T12:30:00Z']);
     assert.deepEqual(parsed.ok && parsed.args.lastRunEndedAtMs, Date.parse('2026-11-21T12:30:00Z'));

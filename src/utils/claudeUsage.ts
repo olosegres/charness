@@ -371,6 +371,8 @@ export function checkIsClaudeModelClearOfLimit(usage: ClaudeUsageSnapshot | unde
 /** What the ranking needs to know about one profile (the bot reads it off state, the CLI off state.json). */
 export interface ClaudeProfileUsageView {
   name: string;
+  /** What the account is called (`utils/claudeProfileLabels.ts`): its display name, `default`'s «Main», else the id. Absent = the id. */
+  label?: string;
   configDir: string | null;
   loggedIn: boolean | undefined;
   email: string | null;
@@ -399,7 +401,10 @@ export interface ClaudeProfileUsageView {
 
 /** One profile in the report the MCP tool and the CLI hand to an agent. */
 export interface ClaudeProfileReportEntry {
+  /** The account's fixed id: what an agent records and passes back (`currentProfile`). */
   name: string;
+  /** What the operator calls the account (its display name in `/accounts`; `default` shows «Main» until renamed, others their id) — the word to use with the user. */
+  label: string;
   /** The `CLAUDE_CONFIG_DIR` to launch under; `null` for the default profile (set nothing). */
   configDir: string | null;
   email: string | null;
@@ -1021,6 +1026,7 @@ export function buildClaudeProfilesReport(profiles: readonly ClaudeProfileUsageV
     const chainExclusion = getClaudeChainExclusion(profile.name, options.chainScope);
     return {
       name: profile.name,
+      label: profile.label ?? profile.name,
       configDir: profile.configDir,
       email: profile.email,
       kind: getClaudeAccountKind(profile.subscriptionType),
