@@ -185,6 +185,9 @@ export type Translate = (code: string, opts?: Record<string, string | number>) =
  * chat as e.g. `agent.foo.bar` — confusing for users. Last-segment
  * fallback at least reads naturally while the warning still hits logs.
  */
+/** A template's placeholder: `{name}`. */
+const placeholderRe = /\{(\w+)\}/g;
+
 export function t(code: string, opts?: Record<string, string | number>): string {
   const locale = getCurrentLocale();
   const primary = dict[locale][code];
@@ -199,10 +202,10 @@ export function t(code: string, opts?: Record<string, string | number>): string 
     template = code.split('.').pop() ?? code;
   }
   if (opts) {
-    for (const [k, v] of Object.entries(opts)) {
-      // A replacer function: a string would read `$&`, `$'` … in the value (a person's name) as replacement patterns.
-      template = template.replace(new RegExp(`\\{${k}\\}`, 'g'), () => v.toString());
-    }
+    // ONE pass over the template's own placeholders: a value is put in as it is and never read again, so a free-text value (an
+    // account's display name) that holds `{count}` is not filled in by a later variable. A replacer function, too: a string would
+    // read `$&`, `$'` … in the value (a person's name) as replacement patterns. A placeholder with no value stays as written.
+    template = template.replace(placeholderRe, (placeholder, name: string) => (Object.hasOwn(opts, name) ? opts[name].toString() : placeholder));
   }
   return template;
 }

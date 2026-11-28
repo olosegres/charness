@@ -72,6 +72,16 @@ test('t puts a value in as it is: a person\'s name with `$` in it is no replacem
   }
 });
 
+test('t substitutes in one pass: a value that holds another placeholder\'s text (a free-text account name) is shown as written, never filled in by a later value', () => {
+  const name = 'x{count} {email} {max}';
+  for (const locale of localeCodes) {
+    const out = runWithLocale(locale, () => t('account.confirmRemove', { name, email: 'me@example.com', count: 3 }));
+    assert.ok(out.includes(name), `${locale}: «${out}» must show the name as written`);
+    assert.ok(out.includes('me@example.com') && out.includes('3'), `${locale}: the real placeholders are still filled: «${out}»`);
+  }
+  assert.equal(t('bind.not_found', { subdir: '{workRoot}', workRoot: '/work' }).includes('{workRoot}'), true, 'an earlier value is not substituted by a later key either');
+});
+
 test('t substitutes multiple placeholders', () => {
   // `bind.not_found` mentions `{subdir}` once + `{workRoot}` once.
   const out = t('bind.not_found', { subdir: 'src', workRoot: '/work' });
