@@ -426,13 +426,16 @@ export function createClaudeAccounts(ports: ClaudeAccountsPorts) {
     return `${row.email ?? '?'}, ${t(`account.kind.${row.kind}`, { plan: row.subscriptionType ?? '?' })}`;
   }
 
-  /** A row's pick button: `✓ Work · work@example.com` — the display name cut to fit a phone (the text above shows it whole). */
+  /**
+   * A row's pick button: `✓ Work · work@example.com`, `Work · not signed in`, or the name alone when there is no email to show (a pasted
+   * API key) — the display name cut to fit a phone (the text above shows it whole), never twice.
+   */
   function formatRowButton(row: AccountPickerRow): string {
     const marker = row.isActive ? '✓ ' : '';
     const detail = row.loggedIn === false || (row.loggedIn === undefined && row.email === null && row.billing !== 'api')
       ? t('account.row.loggedOut')
-      : row.email ?? row.label;
-    return `${marker}${shortenClaudeProfileLabel(row.label)} · ${detail}${row.billing === 'api' ? ' 💳' : ''}`;
+      : row.email;
+    return `${marker}${shortenClaudeProfileLabel(row.label)}${detail === null ? '' : ` · ${detail}`}${row.billing === 'api' ? ' 💳' : ''}`;
   }
 
   async function buildPickerRows(key: SessionKey, isGeneral: boolean): Promise<AccountPickerRow[]> {

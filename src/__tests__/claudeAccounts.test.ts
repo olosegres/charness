@@ -910,7 +910,7 @@ describe('claudeAccounts: /accounts over its ports', () => {
     await harness.runCommand('accounts');
     const screen = harness.replies.at(-1)!;
     assert.match(screen.text ?? '', /• console — 💳 API key · pay per use/, 'a pasted key: no email to show');
-    assert.ok(harness.getKeyboardLabels(screen).flat().some((label) => label === 'console · console 💳'));
+    assert.ok(harness.getKeyboardLabels(screen).flat().some((label) => label === 'console 💳'), 'no email to show: the name once');
 
     await harness.runCommand('accounts', 'login console');
     assert.equal(startedLogins.at(-1)?.profile.billing, 'api', 'the re-login is the Console one');
@@ -1224,6 +1224,22 @@ describe('claudeAccounts: /accounts over its ports', () => {
     } finally {
       for (const name of ['main', 'twin', 'twin-2']) await harness.state.removeClaudeProfileRecord(name);
       fs.rmSync(mainDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a pick button with no email to show names the account once — cut to fit, like any name on a button — and never repeats it as the detail', async () => {
+    const long = 'Console billing for the whole team (EU)';
+    assert.equal(Array.from(long).length, 39);
+    await harness.state.upsertClaudeProfileRecord('teamapi', { createdAt: '2026-01-04T00:00:00.000Z', loggedIn: true, billing: 'api', label: long });
+    setStatus(path.join(dataDir, 'claude-profiles', 'teamapi'), { loggedIn: true, email: null, subscriptionType: null, orgName: null, authMethod: 'api_key_helper', apiKeySource: 'apiKeyHelper', billing: 'api' });
+    try {
+      await harness.runCommand('accounts');
+      const screen = harness.replies.at(-1)!;
+      const row = harness.getKeyboardLabels(screen)[harness.getKeyboardData(screen).findIndex((data) => data[0] === 'acct_use_teamapi')];
+      assert.equal(row?.[0], 'Console billing for the… 💳');
+      assert.match(screen.text ?? '', new RegExp(`\\n• ${long.replace(/[()]/g, '\\$&')} — 💳 API key · pay per use`), 'the text above still shows it whole');
+    } finally {
+      await harness.state.removeClaudeProfileRecord('teamapi');
     }
   });
 
